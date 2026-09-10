@@ -1,0 +1,16 @@
+---
+description: Keep the CRM Agent aligned with its SDD contracts and regression harness.
+globs:
+  - "backend/**/*.py"
+  - "src/**/*.{ts,tsx}"
+alwaysApply: true
+---
+
+# CRM Agent SDD Rules
+
+1. Before changing Agent logic, read `docs/sdd/01-product-spec.md` and `docs/sdd/02-agent-contract.md`.
+2. Do not bypass LangGraph nodes or call CRM write APIs from the frontend.
+3. Any new high-risk path needs a guardrail rule and a Golden Set case in `backend/harness/eval_cases.json`.
+4. Preserve the rule: medical content requires approved evidence; bonus amounts come only from `calculate_bonus`; writes require `confirmation_token`.
+5. After backend changes run `PYTHONPATH=backend backend/.venv/bin/python backend/harness/eval_runner.py`; after frontend changes run `npm run lint` and `npm run build`.
+6. Keep external model providers optional. The default local mode must remain fully runnable without API keys.
