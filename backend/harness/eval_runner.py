@@ -38,6 +38,10 @@ def _check_case(case: dict, result: dict) -> list[str]:
         updates = (result.get("extracted") or {}).get("ladder_updates", [])
         if not any(u.get("dimension") == want["dimension"] and u.get("to") == want["to"] for u in updates):
             errors.append(f"ladder 断言失败：未见 {want['dimension']}→{want['to']}")
+    if case.get("expect_reply_contains") and case["expect_reply_contains"] not in (result.get("reply") or ""):
+        errors.append(f"reply 未包含 {case['expect_reply_contains']}")
+    if case.get("expect_reply_not_contains") and case["expect_reply_not_contains"] in (result.get("reply") or ""):
+        errors.append(f"reply 不应包含 {case['expect_reply_not_contains']}")
     return errors
 
 

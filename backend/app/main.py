@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.agent.graph import run_agent
@@ -96,14 +96,7 @@ def ensure_conversation(db: Session, conversation_id: str | None, user_id: str) 
     return conversation
 
 
-def get_or_create_conversation(db: Session, user_id: str, customer_id: str) -> Conversation:
-    existing = db.scalar(
-        select(Conversation)
-        .where(Conversation.user_id == user_id, Conversation.customer_id == customer_id)
-        .order_by(Conversation.updated_at.desc())
-    )
-    if existing:
-        return existing
+def create_conversation_for(db: Session, user_id: str, customer_id: str) -> Conversation:
     customer = get_customer(customer_id)
     conversation = Conversation(
         id=str(uuid4()),
@@ -116,6 +109,31 @@ def get_or_create_conversation(db: Session, user_id: str, customer_id: str) -> C
     db.commit()
     db.refresh(conversation)
     return conversation
+
+
+def create_unbound_conversation(db: Session, user_id: str) -> Conversation:
+    conversation = Conversation(
+        id=str(uuid4()),
+        user_id=user_id,
+        customer_id=None,
+        customer_name=None,
+        title="新对话",
+    )
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
+def get_or_create_conversation(db: Session, user_id: str, customer_id: str) -> Conversation:
+    existing = db.scalar(
+        select(Conversation)
+        .where(Conversation.user_id == user_id, Conversation.customer_id == customer_id)
+        .order_by(Conversation.updated_at.desc())
+    )
+    if existing:
+        return existing
+    return create_conversation_for(db, user_id, customer_id)
 
 
 def bind_conversation_customer(conversation: Conversation, customer_id: str, customer_name: str) -> None:
@@ -139,7 +157,9 @@ def save_turn(db: Session, conversation_id: str, role: str, text: str, *, kind: 
     ))
 
 
-def refreshed_customer(db: Session, conversation: Conversation) -> dict:
+def refreshed_customer(db: Session, conversation: Conversation) -> dict | None:
+    if not conversation.customer_id:
+        return None
     customer = get_customer(conversation.customer_id)
     turns = db.scalars(select(ConversationTurn).where(
         ConversationTurn.conversation_id == conversation.id,
@@ -166,15 +186,19 @@ def refreshed_customer(db: Session, conversation: Conversation) -> dict:
     return customer
 
 
-async def prepare_run(request: AgentRequest, db: Session) -> tuple[Conversation | None, dict, dict]:
+async def prepare_run(request: AgentRequest, db: Session) -> tuple[Conversation | None, dict | None, dict]:
     """执行 Agent 图并落地待确认草稿；不做最终回答的模型润色（交由端点层）。"""
     conversation = ensure_conversation(db, request.conversation_id, request.user_id)
-    customer = get_customer(request.customer_id)
+    customer_id = request.customer_id or (conversation.customer_id if conversation else None)
+    customer = get_customer(customer_id) if customer_id else None
     if conversation is None:
-        conversation = get_or_create_conversation(db, request.user_id, request.customer_id)
+        if customer_id:
+            conversation = get_or_create_conversation(db, request.user_id, customer_id)
+        else:
+            conversation = create_unbound_conversation(db, request.user_id)
         request.conversation_id = conversation.id
-    else:
-        bind_conversation_customer(conversation, request.customer_id, customer["name"])
+    elif customer_id and customer:
+        bind_conversation_customer(conversation, customer_id, customer["name"])
     previous = db.scalar(select(VisitDraft).where(
         VisitDraft.conversation_id == conversation.id,
         VisitDraft.status == "awaiting_confirmation",
@@ -190,9 +214,9 @@ async def prepare_run(request: AgentRequest, db: Session) -> tuple[Conversation 
         for span in detect_pii(query)["spans"]:
             query = query.replace(span, "[已脱敏]")
     context = refreshed_customer(db, conversation)
-    token = customer_overrides.set({request.customer_id: context})
+    token = customer_overrides.set({customer_id: context} if customer_id and context else {})
     try:
-        result = await run_agent(query, request.mode, request.customer_id)
+        result = await run_agent(query, request.mode, customer_id)
     finally:
         customer_overrides.reset(token)
     if result.get("route") == "post_visit":
@@ -201,7 +225,7 @@ async def prepare_run(request: AgentRequest, db: Session) -> tuple[Conversation 
             request.message = request.message.replace(span, "[已脱敏]")
     result["history"] = dialog_history(db, conversation.id) if conversation else ""
     action = result.get("suggested_action")
-    if result.get("route") == "post_visit" and result.get("extracted") and action:
+    if result.get("route") == "post_visit" and result.get("extracted") and action and customer:
         extracted = result["extracted"]
         if previous:
             previous.status = "superseded"
@@ -323,7 +347,7 @@ async def agent_stream(request: AgentRequest, db: Session = Depends(get_db)) -> 
 
 @app.post(f"{settings.api_prefix}/conversations")
 def create_conversation(request: ConversationCreateRequest, db: Session = Depends(get_db)) -> dict:
-    conversation = get_or_create_conversation(db, request.user_id, request.customer_id)
+    conversation = create_conversation_for(db, request.user_id, request.customer_id)
     return serialize_conversation(conversation)
 
 
@@ -351,8 +375,13 @@ def recommend_articles_endpoint() -> list[dict]:
 
 @app.get(f"{settings.api_prefix}/conversations")
 def list_conversations(user_id: str = "mr-demo-001", db: Session = Depends(get_db)) -> list[dict]:
-    rows = db.scalars(select(Conversation).where(Conversation.user_id == user_id).order_by(Conversation.updated_at.desc()).limit(12)).all()
-    return [serialize_conversation(row) for row in rows]
+    rows = db.scalars(select(Conversation).where(Conversation.user_id == user_id).order_by(Conversation.updated_at.desc()).limit(20)).all()
+    items = []
+    for row in rows:
+        item = serialize_conversation(row)
+        item["turn_count"] = db.scalar(select(func.count()).select_from(ConversationTurn).where(ConversationTurn.conversation_id == row.id)) or 0
+        items.append(item)
+    return items
 
 
 @app.get(f"{settings.api_prefix}/conversations/{{conversation_id}}")

@@ -26,6 +26,17 @@ npm run dev
 
 浏览器打开 http://localhost:3000 。默认走同源 `/api` 代理；后端地址可通过服务端 `BACKEND_URL` 配置，无需让访客连接自己电脑的 localhost。
 
+## 线上演示
+
+不要把 Render 的整包 Docker 地址当作演示入口：免费实例休眠后再打开会先出现 Render 启动页，应用改不掉这张页。
+
+推荐拆开部署：
+
+1. **前端用 Vercel 域名**（面试/演示只发这个链接）。在 Vercel 设置 `BACKEND_URL` 为 FastAPI 地址，例如 `https://<your-service>.onrender.com`。浏览器仍访问同源 `/api`，由 Next 反代到后端。
+2. **后端只跑 FastAPI**（uvicorn，端口与 Render `PORT` 对齐），用 SQLite 持久化会话。不要再把 Next 和 Python 打进同一个会休眠的 Web Service 当入口。
+3. 打开页面会立刻看到拜访助手，并请求 `/api/wake` 去敲后端 `/health`。Vercel Cron 每 10 分钟打一次 `/api/wake` 尽量保活（Hobby 套餐 Cron 可能被限制为每天一次，需要更稳就升 Pro，或把 Render 升到 Starter 常驻）。
+4. 若必须 100% 去掉冷启动，将 Render 改为付费常驻，或换不休眠的主机；演示链接仍然用 Vercel。
+
 ## 推荐体验
 
 1. 选择一位医生，问“最近互动记录和待办是什么？”
@@ -75,4 +86,4 @@ npm run lint
 npm run build
 ```
 
-完整浏览器点击与外部模型效果仍需在实际运行环境验收；尚未公开部署。
+完整浏览器点击与外部模型效果仍需在实际运行环境验收。线上演示请使用 Vercel 域名，不要把 Render 启动页当作产品入口。

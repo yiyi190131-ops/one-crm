@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 class AgentRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     mode: Literal["auto", "pre", "post"] = "auto"
-    customer_id: str = "lin-zhiyuan"
+    customer_id: str | None = None
     user_id: str = "mr-demo-001"
     conversation_id: str | None = None
 
@@ -137,6 +137,7 @@ class TodoDecisionRequest(BaseModel):
 class ConversationCreateRequest(BaseModel):
     user_id: str = "mr-demo-001"
     customer_id: str = Field(min_length=1)
+    force_new: bool = False
 
 
 class TimelineEventRequest(BaseModel):

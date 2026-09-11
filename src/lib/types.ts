@@ -81,7 +81,7 @@ export type HomeTurn = {
   model_mode?: string;
   confirmed?: boolean;
 };
-export type ConversationSummary = { id: string; title: string; updated_at: string; customer_id?: string | null; customer_name?: string | null };
+export type ConversationSummary = { id: string; title: string; updated_at: string; customer_id?: string | null; customer_name?: string | null; turn_count?: number };
 export type DeveloperRun = {
   id: string;
   route: string;

@@ -79,15 +79,11 @@ export function FigmaPrototype() {
       <section className="proto-phone">
         {screen !== "aid" && (
           <header className="proto-top">
-            <StatusBar />
             {concierge ? (
               <img className="logo" src={`${A}concierge.svg`} alt="Concierge" />
             ) : (
               <h1>OneCRM</h1>
             )}
-            <button className="close" aria-label="关闭" onClick={goPre}>
-              <img src={`${A}close.svg`} alt="" />
-            </button>
           </header>
         )}
 
@@ -125,7 +121,6 @@ export function FigmaPrototype() {
             value={input}
             listening={listening}
             showSubmit={showSubmit}
-            pre={screen !== "post"}
             onChange={setInput}
             onVoice={voice}
             onSend={() => (screen === "post" ? sendPost() : sendPre())}
@@ -134,28 +129,12 @@ export function FigmaPrototype() {
         )}
         {screen === "post" && postStage === "done" && (
           <>
-            <button className="proto-btn lg" style={{ position: "absolute", left: 16, bottom: 44 }} onClick={goPre}>
+            <button className="proto-btn lg" style={{ position: "absolute", left: 16, bottom: 16 }} onClick={goPre}>
               返回首页
             </button>
-            <i className="proto-homebar" />
           </>
         )}
       </section>
-    </div>
-  );
-}
-
-function StatusBar() {
-  return (
-    <div className="proto-status">
-      <time>9:41</time>
-      <div className="icons">
-        <img src={`${A}cellular.svg`} width={17} height={11} alt="" />
-        <img src={`${A}wifi.svg`} width={15} height={11} alt="" />
-        <span className="battery" aria-hidden>
-          <i />
-        </span>
-      </div>
     </div>
   );
 }
@@ -199,11 +178,13 @@ function PreBrief({ onAsk, onStart }: { onAsk: (q: string) => void; onStart: () 
       <article className="proto-card">
         <div className="proto-material">
           <img src={`${A}ad-cover.png`} alt="" />
-          <p>中度AD 2型炎症共病</p>
-        </div>
-        <div className="proto-tags">
-          <span>标签1</span>
-          <span>标签2</span>
+          <section>
+            <p>中度AD 2型炎症共病</p>
+            <div className="proto-tags">
+              <span>标签1</span>
+              <span>标签2</span>
+            </div>
+          </section>
         </div>
         <button className="proto-btn" onClick={onStart}>
           开启面对面拜访
@@ -394,7 +375,7 @@ function Aid({
         </button>
         <div className="pill">
           <img src={`${A}aid-icon.png`} alt="" />
-          Crystal Care Medicatio...
+          拜访材料
         </div>
         <button className="plus" aria-label="更多">
           <img src={`${A}aid-plus.svg`} alt="" />
@@ -602,7 +583,6 @@ function Composer({
   value,
   listening,
   showSubmit,
-  pre,
   onChange,
   onVoice,
   onSend,
@@ -611,39 +591,40 @@ function Composer({
   value: string;
   listening: boolean;
   showSubmit: boolean;
-  pre: boolean;
   onChange: (v: string) => void;
   onVoice: () => void;
   onSend: () => void;
   onSubmitVisit: () => void;
 }) {
   return (
-    <footer className="proto-composer">
+    <footer className={`proto-composer${showSubmit ? " has-submit" : ""}`}>
       {showSubmit && (
         <button className="submit" onClick={onSubmitVisit}>
           <img src={`${A}check.svg`} alt="" />
           提交拜访
         </button>
       )}
-      <div className={`proto-input${pre ? " pre" : ""}`}>
+      <div className={`proto-input${listening ? " listening" : ""}`}>
         <textarea
           aria-label="发消息"
           value={value}
-          placeholder={listening ? "正在听写…" : "发消息给Concierge"}
+          placeholder={listening ? "正在听写…" : "发消息给拜访助手"}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              onSend();
+              if (value.trim()) onSend();
             }
           }}
         />
-        <button className={`mic${listening ? " on" : ""}`} aria-label="语音录入" onClick={onVoice}>
+        <button className={`mic${listening ? " on" : ""}`} aria-label={listening ? "结束语音录入" : "语音录入"} onClick={onVoice}>
           <img src={`${A}mic.svg`} alt="" />
         </button>
+        <button className="send" aria-label="发送" disabled={!value.trim()} onClick={onSend}>
+          <img src={`${A}arrow.svg`} alt="" />
+        </button>
       </div>
-      <p className="proto-foot">AI生成内容仅供参考</p>
-      <i className="proto-homebar" />
+      <p className="proto-foot">{listening ? "正在听写，再次点击麦克风结束" : "AI生成内容仅供参考"}</p>
     </footer>
   );
 }

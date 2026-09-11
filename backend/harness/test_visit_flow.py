@@ -87,7 +87,7 @@ class VisitFlowTests(unittest.TestCase):
         self.assertEqual(retrieve_approved_evidence('量子力学')['hit_count'],0)
         self.assertTrue(all(d['id'] not in ('demo-expired','demo-unapproved') for d in safety['documents']))
         answer=self.ask('查询量子力学','auto')
-        self.assertEqual(answer['route'],'pre_visit')
+        self.assertEqual(answer['route'],'capability_guide')
 
     def test_negation_and_no_invented_change(self):
         value=extract_visit_record('医生不认可长期安全，仍担心风险。')

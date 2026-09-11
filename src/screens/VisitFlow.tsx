@@ -1,24 +1,28 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentResponse, Customer, DetailAid, HomeTurn, LadderUpdate, VisitSession } from "@/lib/types";
+import { Children, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { AgentResponse, ConversationSummary, Customer, DetailAid, HomeTurn, LadderUpdate, VisitSession } from "@/lib/types";
+import { DEMO_CUSTOMERS } from "@/lib/demo-customers";
+import { demoUserId } from "@/lib/session";
 
 const A = "/figma/proto/";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
-import { demoUserId } from "@/lib/session";
 type DraftEdits = { feedback: string; next_visit: string; follow_up: string };
 const FACES = ["😞", "😐", "😄"] as const;
 const LADDER = ["中立", "认可", "认可且推荐"] as const;
 
-type Screen = "pick" | "chat" | "aid";
+type Screen = "home" | "aid";
 type ThreadTurn = HomeTurn & { result?: AgentResponse | null };
 type PostStage = "idle" | "parsing1" | "ladder" | "follow" | "parsing2" | "todo" | "confirm" | "done";
-type SpeechRecognitionEvent = { results: { length: number; [index: number]: { [index: number]: { transcript: string } } } };
+type SpeechRecognitionEvent = {
+  results: { length: number; [index: number]: { isFinal?: boolean; [index: number]: { transcript: string } } };
+};
 type SpeechRecognizer = {
   lang: string; continuous: boolean; interimResults: boolean;
   onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onerror: (() => void) | null; onend: (() => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
   start: () => void; stop: () => void;
 };
 type SpeechRecognizerConstructor = new () => SpeechRecognizer;
@@ -28,8 +32,10 @@ function after(stage: PostStage, target: PostStage) {
   return order.indexOf(stage) >= order.indexOf(target);
 }
 
-const TYPE_MS = 8;
-const TYPE_PAUSE_MS = 30;
+const TYPE_MS = 32;
+const TYPE_PAUSE_MS = 160;
+const EVIDENCE_STEP_MS = 220;
+const SAMPLE_POST_FEEDBACK = "医生对长期安全仍有顾虑，希望补充青少年研究资料，下周四下午再次沟通。";
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
@@ -63,6 +69,24 @@ const CHIP_POOL = [
 function unusedChips(turns: ThreadTurn[]) {
   const asked = new Set(turns.filter((turn) => turn.role === "user" && turn.kind === "message").map((turn) => turn.text.trim()));
   return CHIP_POOL.filter((text) => !asked.has(text)).slice(0, 3);
+}
+
+function conversationTime(raw?: string) {
+  if (!raw) return "";
+  const stamp = new Date(raw.includes("T") ? raw : raw.replace(" ", "T"));
+  if (Number.isNaN(stamp.getTime())) return raw.slice(0, 16);
+  const mm = String(stamp.getMonth() + 1).padStart(2, "0");
+  const dd = String(stamp.getDate()).padStart(2, "0");
+  const hh = String(stamp.getHours()).padStart(2, "0");
+  const mi = String(stamp.getMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${mi}`;
+}
+
+function conversationLabel(item: ConversationSummary) {
+  const name = item.customer_name?.trim() || "未选医生";
+  const when = conversationTime(item.updated_at);
+  if (!item.turn_count) return when ? `${name} · 新对话 ${when}` : `${name} · 新对话`;
+  return when ? `${name} ${when}` : name;
 }
 
 function nextId(prefix: string) {
@@ -134,8 +158,9 @@ function restoreVisit(turns: ThreadTurn[]) {
 }
 
 export function VisitFlow() {
-  const [screen, setScreen] = useState<Screen>("pick");
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [screen, setScreen] = useState<Screen>("home");
+  const [customers, setCustomers] = useState<Customer[]>(DEMO_CUSTOMERS);
+  const [waking, setWaking] = useState(true);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -148,15 +173,24 @@ export function VisitFlow() {
   const [postReplies, setPostReplies] = useState<string[]>([]);
   const [postResult, setPostResult] = useState<AgentResponse | null>(null);
   const [todo, setTodo] = useState<"adopt" | "ignore" | null>(null);
-  const [shared, setShared] = useState(false);
   const [aidNote, setAidNote] = useState<string | null>(null);
   const [activeAid, setActiveAid] = useState<DetailAid | null>(null);
   const [detailAids, setDetailAids] = useState<DetailAid[]>([]);
   const [visitSession, setVisitSession] = useState<VisitSession>({ seconds: 0, shownAids: [] });
   const [activeSeconds, setActiveSeconds] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuQuery, setMenuQuery] = useState("");
+  const [showPreDoctors, setShowPreDoctors] = useState(false);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const conversationRef = useRef<string | null>(null);
+  const customerRef = useRef<Customer | null>(null);
+  const intentRef = useRef<"pre" | "post" | null>(null);
   const speechRef = useRef<SpeechRecognizer | null>(null);
+  const voiceBaseRef = useRef("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  customerRef.current = customer;
 
   async function loadAids(customerId: string) {
     try {
@@ -167,18 +201,52 @@ export function VisitFlow() {
     } catch { /* 手卡空态 */ }
   }
 
+  async function wakeBackend() {
+    setWaking(true);
+    try {
+      const res = await fetch("/api/wake", { cache: "no-store" });
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      setWaking(false);
+    }
+  }
+
   async function bindCustomer(next: Customer) {
-    const res = await fetch(`${API_BASE}/conversations`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: demoUserId(), customer_id: next.id }),
-    });
-    if (!res.ok) throw new Error("bind");
-    const conversation = (await res.json()) as { id: string };
-    conversationRef.current = conversation.id;
-    window.localStorage.setItem("crm-agent-conversation", conversation.id);
+    const existingId = conversationRef.current;
+    if (!existingId) {
+      const res = await fetch(`${API_BASE}/conversations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: demoUserId(), customer_id: next.id, force_new: true }),
+      });
+      if (!res.ok) throw new Error("bind");
+      const conversation = (await res.json()) as { id: string };
+      conversationRef.current = conversation.id;
+      setActiveConversationId(conversation.id);
+      window.localStorage.setItem("crm-agent-conversation", conversation.id);
+    }
+    customerRef.current = next;
     setCustomer(next);
     await loadAids(next.id);
+    if (existingId) {
+      setConversations((items) => items.map((item) => (
+        item.id === existingId
+          ? { ...item, customer_id: next.id, customer_name: next.name }
+          : item
+      )));
+      return;
+    }
+    await loadConversations();
+  }
+
+  async function loadConversations() {
+    try {
+      const res = await fetch(`${API_BASE}/conversations?user_id=${demoUserId()}`);
+      if (!res.ok) return;
+      setConversations((await res.json()) as ConversationSummary[]);
+    } catch { /* 菜单空态 */ }
   }
 
   async function loadThread(conversationId: string) {
@@ -194,12 +262,60 @@ export function VisitFlow() {
     setPostResult(restored.postResult);
     setTodo(restored.postResult?.todo_decision ?? null);
     setVisitSession(restored.session);
-    setScreen("chat");
+    setScreen("home");
   }
 
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.classList.remove("is-enter");
+    void el.offsetWidth;
+    el.classList.add("is-enter");
+  }, [screen, !customer && turns.length === 0]);
+
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 9999, behavior: "smooth" });
-  }, [screen, postStage, todo, shared, turns, loading]);
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (loading) stickToBottomRef.current = true;
+  }, [loading]);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || screen === "aid") return;
+    if (turns.length === 0 && screen === "home") {
+      el.scrollTop = 0;
+      return;
+    }
+    const showPostNow = openVisitIndex(turns) >= 0;
+    if (!stickToBottomRef.current && !loading) return;
+    if (loading && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    if (!loading && !showPostNow) {
+      const bots = el.querySelectorAll<HTMLElement>(".proto-turn.proto-bot");
+      const lastBot = bots[bots.length - 1];
+      if (lastBot) {
+        el.scrollTop += lastBot.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        return;
+      }
+    }
+    if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [screen, postStage, todo, turns, loading, customer]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   useEffect(() => {
     if (screen !== "aid") return;
@@ -208,57 +324,176 @@ export function VisitFlow() {
   }, [screen]);
 
   useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/wake", { cache: "no-store" })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setWaking(false); });
+
     void (async () => {
       try {
         const res = await fetch(`${API_BASE}/customers?user_id=${demoUserId()}`);
         if (!res.ok) throw new Error("customers");
         const list = (await res.json()) as Customer[];
+        if (cancelled || !list.length) return;
         setCustomers(list);
         const savedId = window.localStorage.getItem("crm-agent-conversation");
         if (!savedId) return;
         const convRes = await fetch(`${API_BASE}/conversations/${savedId}?user_id=${demoUserId()}`);
         if (!convRes.ok) return;
         const conv = (await convRes.json()) as { id: string; customer_id?: string | null };
-        const matched = list.find((item) => item.id === conv.customer_id);
-        if (!matched) return;
         conversationRef.current = conv.id;
-        setCustomer(matched);
-        await loadAids(matched.id);
+        setActiveConversationId(conv.id);
+        const matched = list.find((item) => item.id === conv.customer_id);
+        if (matched) {
+          setCustomer(matched);
+          await loadAids(matched.id);
+        } else if (conv.customer_id) {
+          return;
+        }
         await loadThread(conv.id);
+        await loadConversations();
       } catch {
-        setPickError("医生列表暂不可用，请确认后端服务后重试。");
+        /* 静态医生列表已可点，不阻塞首屏 */
       }
     })();
+    return () => { cancelled = true; };
   }, []);
 
   async function chooseDoctor(next: Customer) {
+    if (loading || customerRef.current?.id === next.id) return;
+    const startPost = intentRef.current === "post";
+    intentRef.current = null;
     setPickError(null);
+    setShowPreDoctors(false);
+    setInput("");
+    setScreen("home");
     try {
-      await bindCustomer(next);
-      const conversationId = conversationRef.current;
-      if (!conversationId) throw new Error("bind");
-      await loadThread(conversationId);
-      setShared(false);
-      setAidNote(null);
-      setInput("");
-      setActiveSeconds(0);
+      if (startPost) {
+        await bindCustomer(next);
+        setPostStage("idle");
+        setPostTurns([]);
+        setPostReplies([]);
+        setPostResult(null);
+        setTodo(null);
+        setAidNote(null);
+        setActiveAid(null);
+        setVisitSession({ seconds: 0, shownAids: [] });
+        setActiveSeconds(0);
+        setTurns([{
+          id: nextId("s"),
+          role: "system",
+          kind: "visit_session",
+          text: "开始整理访后记录。",
+          payload: { seconds: 0, shown_aids: [] },
+        }]);
+        return;
+      }
+      await pushExchange(next.name, "auto", undefined, async () => {
+        await bindCustomer(next);
+        setPostStage("idle");
+        setPostTurns([]);
+        setPostReplies([]);
+        setPostResult(null);
+        setTodo(null);
+        setAidNote(null);
+        setActiveAid(null);
+        setVisitSession({ seconds: 0, shownAids: [] });
+        setActiveSeconds(0);
+      });
     } catch {
-      setPickError("无法打开该医生的服务记录，请确认后端已启动。");
+      setPickError("服务正在启动，请再试一次。");
+      void wakeBackend();
     }
   }
 
   function goChat() {
-    setScreen("chat");
+    setScreen("home");
     setAidNote(null);
     setInput("");
     setNotice(null);
   }
 
-  function goPick() {
-    setScreen("pick");
+  function newChat() {
+    conversationRef.current = null;
+    setActiveConversationId(null);
+    window.localStorage.removeItem("crm-agent-conversation");
+    setCustomer(null);
+    setTurns([]);
+    setPostStage("idle");
+    setPostTurns([]);
+    setPostReplies([]);
+    setPostResult(null);
+    setTodo(null);
+    setAidNote(null);
+    setActiveAid(null);
+    setDetailAids([]);
+    setVisitSession({ seconds: 0, shownAids: [] });
+    setActiveSeconds(0);
     setInput("");
     setNotice(null);
+    setPickError(null);
     setListening(false);
+    setScreen("home");
+    setMenuOpen(false);
+    intentRef.current = null;
+    setShowPreDoctors(false);
+    setMenuQuery("");
+  }
+
+  async function openConversation(id: string) {
+    setMenuOpen(false);
+    setPickError(null);
+    try {
+      const res = await fetch(`${API_BASE}/conversations/${id}?user_id=${demoUserId()}`);
+      if (!res.ok) throw new Error("thread");
+      const conv = (await res.json()) as ConversationSummary & { turns?: Array<Partial<HomeTurn> & { text: string; role: HomeTurn["role"] }> };
+      const matched = customers.find((item) => item.id === conv.customer_id) ?? null;
+      conversationRef.current = conv.id;
+      setActiveConversationId(conv.id);
+      window.localStorage.setItem("crm-agent-conversation", conv.id);
+      setCustomer(matched);
+      if (matched) await loadAids(matched.id);
+      await loadThread(conv.id);
+      setAidNote(null);
+      setInput("");
+      intentRef.current = null;
+      setShowPreDoctors(false);
+    } catch {
+      setPickError("无法打开这条聊天记录。");
+    }
+  }
+
+  function namedDoctors(raw: string) {
+    const q = raw.replace(/\s+/g, "");
+    if (!q) return [];
+    return customers.filter((item) => {
+      const name = item.name.replace(/\s+/g, "");
+      return q === name || q.includes(name) || (q.length >= 2 && name.includes(q));
+    });
+  }
+
+  async function sendWithoutCustomer(text = input) {
+    const q = text.trim();
+    if (!q || loading) return;
+    setNotice(null);
+    setPickError(null);
+    const named = namedDoctors(q);
+    if (named.length === 1) {
+      setInput("");
+      void chooseDoctor(named[0]);
+      return;
+    }
+    if (q === "访前准备") {
+      intentRef.current = "pre";
+      setShowPreDoctors(true);
+    }
+    if (q === "访后记录") {
+      intentRef.current = "post";
+      setShowPreDoctors(false);
+    }
+    setInput("");
+    const data = await pushExchange(q, "auto");
+    if (data?.route && data.route !== "need_customer") intentRef.current = null;
   }
 
   async function askAgent(message: string, mode: "auto" | "pre" | "post", onToken: (text: string) => void) {
@@ -268,9 +503,9 @@ export function VisitFlow() {
       body: JSON.stringify({
         message,
         mode,
-        customer_id: customer?.id,
         user_id: demoUserId(),
-        conversation_id: conversationRef.current,
+        ...(customerRef.current?.id ? { customer_id: customerRef.current.id } : {}),
+        ...(conversationRef.current ? { conversation_id: conversationRef.current } : {}),
       }),
     });
     if (!res.ok || !res.body) throw new Error("stream");
@@ -311,7 +546,7 @@ export function VisitFlow() {
     throw new Error("empty-stream");
   }
 
-  async function pushExchange(q: string, mode: "auto" | "post", onPartial?: (text: string) => void) {
+  async function pushExchange(q: string, mode: "auto" | "post", onPartial?: (text: string) => void, beforeAsk?: () => Promise<void>) {
     const userId = nextId("u");
     const botId = nextId("a");
     setLoading(true);
@@ -321,6 +556,7 @@ export function VisitFlow() {
       { id: botId, role: "assistant", kind: "message", text: "", result: { reply: "" } as AgentResponse },
     ]);
     try {
+      if (beforeAsk) await beforeAsk();
       const data = await askAgent(q, mode, (partial) => {
         onPartial?.(partial);
         setTurns((items) => items.map((item) => (
@@ -329,6 +565,7 @@ export function VisitFlow() {
       });
       if (data.conversation_id) {
         conversationRef.current = data.conversation_id;
+        setActiveConversationId(data.conversation_id);
         window.localStorage.setItem("crm-agent-conversation", data.conversation_id);
       }
       setTurns((items) => items.map((item) => (
@@ -336,10 +573,12 @@ export function VisitFlow() {
       )));
       return data;
     } catch {
-      const fallback = "暂时无法连接服务，请确认本地服务已启动。";
+      const fallback = "服务正在启动，请再试一次。";
       setTurns((items) => items.map((item) => (
         item.id === botId ? { ...item, text: fallback, result: { reply: fallback, trace: [] } as AgentResponse } : item
       )));
+      setNotice("服务正在启动，请再试一次");
+      void wakeBackend();
       return null;
     } finally {
       setLoading(false);
@@ -351,7 +590,6 @@ export function VisitFlow() {
     if (!q || loading || !customer) return;
     setInput("");
     setNotice(null);
-    setScreen("chat");
     await pushExchange(q, "auto");
   }
 
@@ -374,7 +612,7 @@ export function VisitFlow() {
       });
     });
     if (!data) {
-      setNotice("暂时无法解析拜访记录，请确认后端服务后重试。");
+      setNotice("服务正在启动，请再试一次。");
       setPostStage(first ? "idle" : "follow");
       return;
     }
@@ -388,11 +626,15 @@ export function VisitFlow() {
     setPostStage(data.todo_suggestion ? "todo" : first ? "ladder" : "todo");
   }
 
+  function stopVoice() {
+    speechRef.current?.stop();
+    speechRef.current = null;
+    setListening(false);
+  }
+
   function voice() {
     if (listening) {
-      speechRef.current?.stop();
-      speechRef.current = null;
-      setListening(false);
+      stopVoice();
       return;
     }
     const w = window as typeof window & { SpeechRecognition?: SpeechRecognizerConstructor; webkitSpeechRecognition?: SpeechRecognizerConstructor };
@@ -402,19 +644,40 @@ export function VisitFlow() {
       return;
     }
     setNotice(null);
+    voiceBaseRef.current = input.trim();
     setListening(true);
     const recognition = new Recognition();
     speechRef.current = recognition;
     recognition.lang = "zh-CN";
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.continuous = true;
+    recognition.interimResults = true;
     recognition.onresult = (event) => {
-      const spoken = event.results[event.results.length - 1][0].transcript.trim();
-      setInput(spoken);
+      let finals = "";
+      let interim = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const piece = event.results[i][0]?.transcript ?? "";
+        if (event.results[i].isFinal) finals += piece;
+        else interim += piece;
+      }
+      const spoken = `${finals}${interim}`.trim();
+      setInput([voiceBaseRef.current, spoken].filter(Boolean).join(" "));
     };
-    recognition.onerror = () => setNotice("未能识别语音，请检查麦克风权限后重试。");
-    recognition.onend = () => { speechRef.current = null; setListening(false); };
+    recognition.onerror = () => {
+      setNotice("未能识别语音，请检查麦克风权限后重试。");
+      stopVoice();
+    };
+    recognition.onend = () => {
+      speechRef.current = null;
+      setListening(false);
+    };
     try { recognition.start(); } catch { setListening(false); setNotice("无法启动麦克风。"); }
+  }
+
+  function sendComposer() {
+    if (listening) stopVoice();
+    if (showPost) void sendPost();
+    else if (!customer) void sendWithoutCustomer();
+    else void sendPre();
   }
 
   async function finishAid() {
@@ -443,7 +706,7 @@ export function VisitFlow() {
     setPostReplies([]);
     setPostResult(null);
     setTodo(null);
-    setScreen("chat");
+    setScreen("home");
     setInput("");
     setNotice(null);
   }
@@ -519,9 +782,18 @@ export function VisitFlow() {
 
   const showPost = openVisitIndex(turns) >= 0;
   const lastTurn = turns.at(-1);
-  const concierge = showPost;
   const showSubmit = showPost && postStage !== "done";
-  const scrollClass = screen === "aid" ? "proto-scroll aid" : "proto-scroll";
+  const showFill = showPost && postStage === "idle";
+  const welcome = !customer && screen !== "aid" && turns.length === 0 && !loading;
+  const scrollClass = [
+    screen === "aid" ? "proto-scroll aid" : "proto-scroll",
+    welcome ? "is-idle" : "",
+  ].filter(Boolean).join(" ");
+  const visibleConversations = conversations.filter((item) => {
+    const q = menuQuery.trim().toLowerCase();
+    if (!q) return true;
+    return conversationLabel(item).toLowerCase().includes(q) || (item.title ?? "").toLowerCase().includes(q);
+  });
   const suggestions = unusedChips(turns);
 
   return (
@@ -529,57 +801,117 @@ export function VisitFlow() {
       <section className="proto-phone">
         {screen !== "aid" && (
           <header className="proto-top">
-            <StatusBar />
-            {concierge ? <img className="logo" src={`${A}concierge.svg`} alt="Concierge" /> : <h1>OneCRM</h1>}
-            <button className="close" aria-label="关闭" onClick={goPick}>
-              <img src={`${A}close.svg`} alt="" />
+            <button className="proto-more" aria-label="更多" onClick={() => { setMenuOpen((open) => !open); if (!menuOpen) { setMenuQuery(""); void loadConversations(); } }}>
+              <i /><i /><i />
             </button>
+            <h1>拜访助手</h1>
           </header>
+        )}
+        {screen !== "aid" && (
+          <div className={`proto-drawer${menuOpen ? " is-open" : ""}`} onClick={() => setMenuOpen(false)}>
+            <aside className="proto-drawer-panel" onClick={(event) => event.stopPropagation()} aria-label="更多">
+              <div className="proto-drawer-head">
+                <label className="proto-drawer-search">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="11" cy="11" r="6.25" stroke="currentColor" strokeWidth="1.75" />
+                    <path d="M16.2 16.2 20 20" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+                  </svg>
+                  <input
+                    value={menuQuery}
+                    onChange={(event) => setMenuQuery(event.target.value)}
+                    placeholder="搜索对话"
+                    aria-label="搜索对话"
+                  />
+                </label>
+                <button className="proto-drawer-create" type="button" aria-label="新建对话" onClick={newChat}>
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+              <div className="proto-drawer-list">
+                <p>历史聊天</p>
+                {visibleConversations.length ? visibleConversations.map((item) => (
+                  <button
+                    key={item.id}
+                    className={`proto-drawer-item${item.id === activeConversationId ? " on" : ""}`}
+                    onClick={() => void openConversation(item.id)}
+                  >
+                    {conversationLabel(item)}
+                  </button>
+                )) : <span>{conversations.length ? "没有匹配的对话" : "还没有聊天记录"}</span>}
+              </div>
+            </aside>
+          </div>
         )}
 
         <div className={scrollClass} ref={scrollRef}>
-          <aside className="demo-intro">
-            <strong>一次拜访，从准备到跟进</strong>
-            <p>选一位医生，自由提问或使用示例。客户与医学材料均为演示数据；你确认的记录会真实保存在当前体验中。</p>
-          </aside>
-          {screen === "pick" && <DoctorPick customers={customers} error={pickError} onChoose={chooseDoctor} />}
-          {screen === "chat" && customer && (
+          {screen !== "aid" && (
             <>
-              <PreBrief customer={customer} aids={detailAids} onAsk={sendPre} onStart={() => { setActiveAid(detailAids[0] ?? null); setActiveSeconds(0); setScreen("aid"); }} showChips={false} />
-              { (showPost && openVisitIndex(turns) >= 0 ? turns.slice(0, openVisitIndex(turns) + 1) : turns).map((turn) => (
-                <TurnBlock
-                  key={turn.id}
-                  turn={turn}
-                  customer={customer}
-                  streaming={loading && turn.id === lastTurn?.id && turn.role === "assistant" && !showPost}
-                  shared={shared}
-                  onShare={() => setShared(true)}
-                  onOpenMaterial={(aid) => { setActiveAid(aid); setActiveSeconds(0); setScreen("aid"); }}
-                />
-              ))}
-              {showPost && !loading && postStage === "idle" && (
-                <div className="proto-chips"><button className="proto-btn" onClick={() => void sendPost("医生对长期安全仍有顾虑，希望补充青少年研究资料，下周四下午再次沟通。")}>试填一段模拟拜访反馈</button></div>
-              )}
-              {showPost && (
-                <Post
-                  customer={customer}
-                  session={visitSession}
-                  stage={postStage}
-                  turns={postTurns}
-                  narratives={postReplies}
-                  result={postResult}
-                  todo={todo}
-                  streaming={loading}
-                  onConfirmLadder={() => setPostStage("follow")}
-                  onTodo={(v) => void decideTodo(v)}
-                  onConfirm={(edits) => void confirmVisit(edits)}
-                  onCancel={() => setPostStage("todo")}
+              {!customer && welcome && (
+                <DoctorPick
+                  error={pickError}
+                  onPreVisit={() => void sendWithoutCustomer("访前准备")}
+                  onPostVisit={() => void sendWithoutCustomer("访后记录")}
                 />
               )}
-              {!showPost && !loading && suggestions.length > 0 && (
-                <div className="proto-chips">
-                  {suggestions.map((text) => <Chip key={text} text={text} onAsk={sendPre} />)}
-                </div>
+              {!customer && !welcome && (
+                <>
+                  {turns.map((turn) => (
+                    <TurnBlock
+                      key={turn.id}
+                      turn={turn}
+                      customer={null}
+                      streaming={loading && turn.id === lastTurn?.id && turn.role === "assistant"}
+                      onOpenMaterial={(aid) => { setActiveAid(aid); setActiveSeconds(0); setScreen("aid"); }}
+                    />
+                  ))}
+                  {showPreDoctors && !loading && (
+                    <DoctorSuggest customers={customers} onChoose={chooseDoctor} />
+                  )}
+                </>
+              )}
+              {customer && (
+                <>
+                  {!showPost && turns.length === 0 && (
+                    <div className="proto-turn is-user">
+                      <div className="proto-user">拜访{customer.name}</div>
+                    </div>
+                  )}
+                  {(showPost && openVisitIndex(turns) >= 0 ? turns.slice(0, openVisitIndex(turns) + 1) : turns).map((turn) => (
+                    <TurnBlock
+                      key={turn.id}
+                      turn={turn}
+                      customer={customer}
+                      streaming={loading && turn.id === lastTurn?.id && turn.role === "assistant" && !showPost}
+                      onOpenMaterial={(aid) => { setActiveAid(aid); setActiveSeconds(0); setScreen("aid"); }}
+                    />
+                  ))}
+                  {!showPost && turns.length === 0 && (
+                    <PreBrief customer={customer} aids={detailAids} onAsk={sendPre} onStart={() => { setActiveAid(detailAids[0] ?? null); setActiveSeconds(0); setScreen("aid"); }} showChips={false} />
+                  )}
+                  {showPost && (
+                    <Post
+                      customer={customer}
+                      session={visitSession}
+                      stage={postStage}
+                      turns={postTurns}
+                      narratives={postReplies}
+                      result={postResult}
+                      todo={todo}
+                      streaming={loading}
+                      onConfirmLadder={() => setPostStage("follow")}
+                      onTodo={(v) => void decideTodo(v)}
+                      onConfirm={(edits) => void confirmVisit(edits)}
+                      onCancel={() => setPostStage("todo")}
+                    />
+                  )}
+                  {!showPost && !loading && suggestions.length > 0 && (
+                    <div className="proto-chips">
+                      {suggestions.map((text) => <Chip key={text} text={text} onAsk={sendPre} />)}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
@@ -588,23 +920,29 @@ export function VisitFlow() {
               aid={activeAid}
               note={aidNote}
               onBack={goChat}
-              onShare={() => setAidNote("演示环境未连接企业微信分享，请在当前页面查看材料。")}
-              onRemote={() => setAidNote("演示环境未连接远程会议服务。")}
+              onShare={() => setNotice("演示环境未连接企业微信分享，请在当前页面查看材料。")}
+              onRemote={() => setNotice("演示环境未连接远程会议服务。")}
               onSubmit={() => void finishAid()}
             />
           )}
-          {notice && <p className="proto-error">{notice}</p>}
         </div>
 
-        {screen === "chat" && (
+        {notice && <p className="proto-toast" role="status">{notice}</p>}
+
+        {screen !== "aid" && (
           <Composer
             value={input}
             listening={listening}
+            loading={loading}
+            waking={waking}
+            showFill={showFill}
             showSubmit={showSubmit}
-            pre={!showPost}
+            idle={welcome}
+            placeholder={welcome ? "今天我能为您做些什么？" : "发消息给拜访助手"}
             onChange={setInput}
+            onFill={() => setInput(SAMPLE_POST_FEEDBACK)}
             onVoice={voice}
-            onSend={() => (showPost ? void sendPost() : void sendPre())}
+            onSend={sendComposer}
             onSubmitVisit={() => setPostStage("confirm")}
           />
         )}
@@ -613,49 +951,66 @@ export function VisitFlow() {
   );
 }
 
-function StatusBar() {
+function DoctorPick({
+  error, onPreVisit, onPostVisit,
+}: {
+  error: string | null;
+  onPreVisit: () => void; onPostVisit: () => void;
+}) {
   return (
-    <div className="proto-status">
-      <time>9:41</time>
-      <div className="icons">
-        <img src={`${A}cellular.svg`} width={17} height={11} alt="" />
-        <img src={`${A}wifi.svg`} width={15} height={11} alt="" />
-        <span className="battery" aria-hidden><i /></span>
+    <div className="proto-idle">
+      <div className="proto-idle-hero">
+        <h2 className="proto-hello">欢迎，<em>Xiang</em></h2>
+        <div className="proto-caps">
+          <button type="button" onClick={onPreVisit}>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect width="8" height="4" x="8" y="2" rx="1" stroke="currentColor" strokeWidth="1.75" />
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" stroke="currentColor" strokeWidth="1.75" />
+              <path d="M8 11h.01M8 16h.01M12 11h4M12 16h4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+            访前准备
+          </button>
+          <button type="button" onClick={onPostVisit}>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" />
+              <path d="M14 2v4a2 2 0 0 0 2 2h4" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" />
+              <path d="m9 15 2 2 4-4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            访后记录
+          </button>
+        </div>
       </div>
+      {error && <p className="proto-error">{error}</p>}
     </div>
   );
 }
 
-function DoctorPick({ customers, error, onChoose }: { customers: Customer[]; error: string | null; onChoose: (c: Customer) => void }) {
+function DoctorSuggest({ customers, onChoose }: { customers: Customer[]; onChoose: (c: Customer) => void }) {
   return (
-    <>
-      <p className="proto-copy">👋 欢迎使用访前助手！</p>
-      <p className="proto-copy">请选择本次服务的医生。选择后，Agent 只读取该医生授权范围内的 CRM 与机构数据。</p>
+    <div className="proto-guide">
+      <p className="proto-pick-label">👇 这几位也许是你要找的</p>
       <div className="proto-pick">
         {customers.map((item) => (
           <button key={item.id} className="proto-pick-item" onClick={() => onChoose(item)}>
-            <i>{item.name.slice(0, 1)}</i>
             <section>
               <b>{item.name}</b>
               <small>{item.title} · {item.hospital}</small>
-              <em>{item.tier}</em>
             </section>
             <strong>›</strong>
           </button>
         ))}
       </div>
-      {error && <p className="proto-error">{error}</p>}
-    </>
+    </div>
   );
 }
 
 function PreBrief({ customer, aids, onAsk, onStart, showChips = true }: { customer: Customer; aids: DetailAid[]; onAsk: (q: string) => void; onStart: () => void; showChips?: boolean }) {
   const product = customer.product;
   const material = aids[0];
-  const evidence = "点击下方示例或直接提问，获取与医生关注点匹配的演示材料";
+  const articleTitle = "达必妥与 JAK 抑制剂安全性对比研究（2026）";
   return (
     <>
-      <p className="proto-copy">👋 正在为{customer.name}准备访前助手！</p>
+      <p className="proto-copy">已为你准备好{customer.name}的访前简报。</p>
       <ul className="proto-list proto-copy">
         <li>当前内容围绕<b>{product}</b>展开。如需查看其他相关内容可以告诉我。</li>
       </ul>
@@ -668,7 +1023,10 @@ function PreBrief({ customer, aids, onAsk, onStart, showChips = true }: { custom
       </ul>
       <p className="proto-copy" style={{ marginTop: 12 }}>🎯 <b>本次拜访重点：</b></p>
       <ul className="proto-list proto-copy">
-        <li>优先回应医生上次提出的需求，并查阅相关已审批资料<a>：「{evidence}」</a></li>
+        <li>
+          优先回应医生上次提出的需求，并查阅相关已审批资料
+          <a href="#aid" onClick={(event) => { event.preventDefault(); onStart(); }}>「{articleTitle}」</a>
+        </li>
         <li>{customer.meeting ? <>可询问医生是否有意向参加<b>{customer.meeting}</b>。</> : <>推进待办：<b>{customer.open_task}</b>。</>}</li>
       </ul>
       <hr className="proto-rule" />
@@ -680,10 +1038,12 @@ function PreBrief({ customer, aids, onAsk, onStart, showChips = true }: { custom
       <article className="proto-card">
         <div className="proto-material">
           <img src={`${A}ad-cover.png`} alt="" />
-          <p>{material?.subtitle ?? material?.title ?? "中度AD 2型炎症共病"}</p>
-        </div>
-        <div className="proto-tags">
-          {(material?.tags ?? ["标签1", "标签2"]).map((tag) => <span key={tag}>{tag}</span>)}
+          <section>
+            <p>{material?.subtitle ?? material?.title ?? "中度AD 2型炎症共病"}</p>
+            <div className="proto-tags">
+              {(material?.tags ?? ["标签1", "标签2"]).map((tag) => <span key={tag}>{tag}</span>)}
+            </div>
+          </section>
         </div>
         <button className="proto-btn" onClick={onStart}>开启面对面拜访</button>
       </article>
@@ -707,10 +1067,10 @@ function Chip({ text, onAsk }: { text: string; onAsk: (q: string) => void }) {
   );
 }
 
-function StatusLine({ text }: { text: string }) {
+function StatusLine({ text, busy }: { text: string; busy?: boolean }) {
   return (
-    <div className="proto-status-line">
-      <img src={`${A}parsed.svg`} alt="" />
+    <div className={`proto-status-line${busy ? " is-busy" : ""}`}>
+      {busy ? <i className="proto-spinner" aria-hidden /> : <img src={`${A}parsed.svg`} alt="" />}
       {text}
     </div>
   );
@@ -726,21 +1086,45 @@ function TypedReply({ text, streaming }: { text?: string; streaming: boolean }) 
   );
 }
 
-function TurnBlock({ turn, customer, streaming, shared, onShare, onOpenMaterial }: {
+function Staggered({ streaming, children, step = EVIDENCE_STEP_MS }: { streaming: boolean; children: ReactNode; step?: number }) {
+  const items = Children.toArray(children).filter(Boolean);
+  const [live] = useState(streaming);
+  const [revealed, setRevealed] = useState(0);
+
+  useEffect(() => {
+    if (streaming || !live || items.length === 0) return;
+    const timer = window.setInterval(() => {
+      setRevealed((n) => {
+        const next = n + 1;
+        if (next >= items.length) window.clearInterval(timer);
+        return next;
+      });
+    }, step);
+    return () => window.clearInterval(timer);
+  }, [streaming, live, items.length, step]);
+
+  const count = streaming ? 0 : live ? Math.min(revealed, items.length) : items.length;
+  if (!count) return null;
+  return (
+    <>
+      {items.slice(0, count).map((child, index) => (
+        <div key={index} className="proto-reveal">{child}</div>
+      ))}
+    </>
+  );
+}
+
+function TurnBlock({ turn, customer, streaming, onOpenMaterial }: {
   turn: ThreadTurn;
-  customer: Customer;
+  customer: Customer | null;
   streaming: boolean;
-  shared: boolean;
-  onShare: () => void;
   onOpenMaterial: (aid: DetailAid) => void;
 }) {
   if (turn.kind === "visit_session") {
-    const aids = turn.payload?.shown_aids ?? [];
     return (
       <article className="proto-system">
         <p className="proto-copy"><b>面对面拜访</b></p>
         <p className="proto-copy">{turn.text}</p>
-        {aids.map((aid) => <p className="proto-note" key={aid.id}>{aid.title}</p>)}
       </article>
     );
   }
@@ -759,55 +1143,103 @@ function TurnBlock({ turn, customer, streaming, shared, onShare, onOpenMaterial 
   const route = turn.route ?? result.route;
   return (
     <div className="proto-turn proto-bot">
-      <StatusLine text={streaming ? "正在根据已取回数据组织回答…" : "解析已完成"} />
+      <StatusLine busy={streaming} text={streaming ? "解析中" : "解析已完成"} />
       <TypedReply text={result.reply || turn.text} streaming={streaming} />
-      {!streaming && result.trace && <details className="demo-intro"><summary>查看执行过程与依据</summary>
-        <p>{result.model_mode === "local" ? "本次使用本地规则模式" : `本次模型模式：${result.model_mode}`}</p>
-        {result.trace.map((step, i) => <p key={i}>{step.label}：{step.detail}</p>)}
-      </details>}
-      {!streaming && route === "customer_insight" && <InsightEvidence customer={customer} />}
-      {!streaming && (route === "material_recommendation" || route === "pre_visit") && <MaterialEvidence result={result} shared={shared} onShare={onShare} onOpen={onOpenMaterial} />}
-      {!streaming && route === "institution_access" && <HospitalEvidence customer={customer} />}
-      {!streaming && (route === "capability_guide" || route === "guardrail") && <GuideEvidence />}
+      {route === "customer_insight" && customer && <InsightEvidence customer={customer} streaming={streaming} />}
+      {(route === "material_recommendation" || route === "pre_visit") && (
+        <Staggered streaming={streaming}>
+          <MaterialEvidence result={result} onOpen={onOpenMaterial} />
+        </Staggered>
+      )}
+      {route === "institution_access" && customer && (
+        <Staggered streaming={streaming}>
+          <HospitalEvidence customer={customer} />
+        </Staggered>
+      )}
+      {(route === "capability_guide" || route === "guardrail") && (
+        <Staggered streaming={streaming}>
+          <GuideEvidence />
+        </Staggered>
+      )}
     </div>
   );
 }
 
-function InsightEvidence({ customer }: { customer: Customer }) {
+function InsightEvidence({ customer, streaming }: { customer: Customer; streaming: boolean }) {
   const stats = customer.interaction_stats ?? {};
   const events = customer.interactions ?? [];
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? events : events.slice(0, 2);
   return (
-    <>
+    <Staggered streaming={streaming}>
       <p className="proto-copy">👤 当前观念阶梯：<b>{customer.tier}</b></p>
-      <p className="proto-copy" style={{ marginTop: 12 }}>📈 近1个月互动概览</p>
-      <div className="proto-table">
-        <div className="head"><span>互动类型</span><span>互动次数</span></div>
-        {Object.entries(stats).map(([type, count]) => (
-          <div key={type}><span>{type}</span><span>{count}</span></div>
-        ))}
+      <div>
+        <p className="proto-copy" style={{ marginTop: 12 }}>📈 近1个月互动概览</p>
+        <div className="proto-table">
+          <div className="head"><span>互动类型</span><span>互动次数</span></div>
+          {Object.entries(stats).map(([type, count]) => (
+            <div key={type}><span>{type}</span><span>{count}</span></div>
+          ))}
+        </div>
       </div>
-      <p className="proto-copy" style={{ marginTop: 16 }}>📋 详细互动记录</p>
-      <div className="proto-timeline">
-        {events.map((event) => (
-          <div className="proto-event" key={`${event.date}-${event.type}`}>
-            <b>{event.date} | {event.type}</b>
-            <div className="box"><p>{event.detail}</p></div>
-          </div>
-        ))}
+      <div>
+        <p className="proto-copy" style={{ marginTop: 16 }}>📋 详细互动记录</p>
+        <div className="proto-timeline">
+          {visible.map((event) => (
+            <div className="proto-event" key={`${event.date}-${event.type}`}>
+              <b>{event.date} | {event.type}</b>
+              <div className="box"><p>{event.detail}</p></div>
+            </div>
+          ))}
+        </div>
+        {events.length > 2 && !expanded && (
+          <button type="button" className="proto-expand" onClick={() => setExpanded(true)}>
+            展开全部 {events.length} 条
+          </button>
+        )}
       </div>
-    </>
+    </Staggered>
   );
 }
 
-function MaterialEvidence({ result, onOpen }: { result: AgentResponse; shared: boolean; onShare: () => void; onOpen: (aid: DetailAid) => void }) {
+function MaterialEvidence({ result, onOpen }: { result: AgentResponse; onOpen: (aid: DetailAid) => void }) {
   const docs = (result.sources ?? []).filter((source) => source.kind === "approved-evidence" || source.kind === "approved-material");
   if (!docs.length) return <p className="proto-note">未检索到相关有效材料，可换一个主题继续询问。</p>;
-  return <>{docs.map((doc) => <article className="proto-card article" key={doc.id}>
-    <div className="proto-material"><p>{doc.title}</p></div>
-    <p className="proto-note">{doc.version} · {doc.status}</p>
-    <details><summary>查看资料内容与来源</summary><p className="proto-copy">{doc.excerpt}</p><p className="proto-note">{doc.location}</p></details>
-    <button className="proto-btn" onClick={() => onOpen({id:doc.id,title:doc.title,subtitle:doc.version,points:[doc.excerpt],tags:["演示资料"],status:doc.status})}>打开此材料进行演示</button>
-  </article>)}</>;
+  return (
+    <>
+      {docs.map((doc) => {
+        const title = doc.title.replace(/^演示材料：/, "");
+        const tags = [doc.status.split(" · ")[0], doc.version].filter(Boolean);
+        return (
+          <article className="proto-card" key={doc.id}>
+            <div className="proto-material">
+              <img src={`${A}ad-cover.png`} alt="" />
+              <section>
+                <p>{title}</p>
+                <div className="proto-tags">
+                  {tags.map((tag) => <span key={tag}>{tag}</span>)}
+                </div>
+              </section>
+            </div>
+            {doc.excerpt && <p className="proto-excerpt">{doc.excerpt}</p>}
+            <button
+              className="proto-btn"
+              onClick={() => onOpen({
+                id: doc.id,
+                title: doc.title,
+                subtitle: doc.version,
+                points: [doc.excerpt],
+                tags: tags.length ? tags : ["演示资料"],
+                status: doc.status,
+              })}
+            >
+              打开此材料进行演示
+            </button>
+          </article>
+        );
+      })}
+    </>
+  );
 }
 
 function HospitalEvidence({ customer }: { customer: Customer }) {
@@ -845,9 +1277,7 @@ function Aid({ aid, note, onBack, onShare, onRemote, onSubmit }: { aid: DetailAi
         <button className="plus" aria-label="更多"><img src={`${A}aid-plus.svg`} alt="" /></button>
       </div>
       <div className="proto-aid-body">
-        <h2>{aid?.title ?? "未选择材料"}</h2>
-        <p className="proto-note">演示材料，非真实医学依据。{aid?.subtitle}</p>
-        {(aid?.points ?? []).map((point, index) => <p className="proto-copy" key={index}>{point}</p>)}
+        <img className="chart" src={`${A}aid-long.png`} alt={aid?.title ?? "拜访材料"} />
         {note && <p className="proto-note">{note}</p>}
       </div>
       <nav className="proto-aid-bar">
@@ -865,7 +1295,7 @@ function FaceRow({ active }: { active: string }) {
       {LADDER.map((label, i) => (
         <span key={label} className={`proto-face${active === label ? " on" : ""}`}>
           <b>{FACES[i]}</b>
-          {label}
+          <em>{label}</em>
         </span>
       ))}
     </div>
@@ -929,27 +1359,36 @@ function Post({
       <p className="proto-copy">
         我想了解一下，这次您和{customer.name}讨论{customer.product}时，他对于产品有什么反馈，<b>观念阶梯是否有变化</b>？（比如长期安全、维稳等）
       </p>
-      {user1 && <div className="proto-user" style={{ marginTop: 16, maxWidth: 335, marginLeft: 0, marginRight: "auto" }}>{user1}</div>}
+      {user1 && (
+        <div className="proto-turn is-user">
+          <div className="proto-user">{user1}</div>
+        </div>
+      )}
       {(stage === "parsing1" || after(stage, "ladder")) && (
-        <StatusLine text={stage === "parsing1" ? "正在根据拜访记录组织说明…" : "解析已完成"} />
+        <StatusLine busy={stage === "parsing1"} text={stage === "parsing1" ? "解析中" : "解析已完成"} />
       )}
       {(stage === "parsing1" || after(stage, "ladder")) && (
         <TypedReply text={narratives[0] || result?.reply} streaming={streaming && stage === "parsing1"} />
       )}
       {after(stage, "ladder") && result?.extracted && (
         <article className="proto-km">
-          <p>收到！感谢您的反馈 👍 根据您的记录，我将整理并更新本次拜访所收集到的关键信息对于医生洞察进行更新：</p>
-          {updates.map((update, i) => (
-            <div key={update.dimension}>
+          <p>根据本次反馈，整理出以下观念变化。确认提交前不会写入 CRM。</p>
+          {updates.map((update) => (
+            <div className="proto-km-item" key={update.dimension}>
               <p className="proto-km-row">
-                <img src={`${A}km-icon.svg`} alt="" width={16} height={16} style={{ verticalAlign: "middle", marginRight: 4 }} />
-                <span>关键信息{i + 1}：</span>{update.dimension}
+                <img src={`${A}km-icon.svg`} alt="" width={16} height={16} />
+                {update.dimension}
+              </p>
+              <p className="proto-km-change">
+                {update.from && update.from !== update.to ? <>{update.from} <span>→</span> {update.to}</> : update.to}
               </p>
               <FaceRow active={update.to} />
             </div>
           ))}
-          {!updates.length && <p className="proto-note">未识别到明确的观念变化，将保留原状态。可在下方继续补充。</p>}
-          {stage === "ladder" ? <button className="proto-btn" onClick={onConfirmLadder}>继续补充跟进安排</button> : <p className="proto-note">已加入待确认草稿，尚未写入</p>}
+          {!updates.length && <p className="proto-note">未识别到明确的观念变化，将保留原状态。可继续补充跟进安排。</p>}
+          {stage === "ladder" && (
+            <button type="button" className="proto-btn" onClick={onConfirmLadder}>继续补充跟进安排</button>
+          )}
         </article>
       )}
       {after(stage, "follow") && (
@@ -958,11 +1397,13 @@ function Post({
         </p>
       )}
       {user2 && (
-        <div className={`proto-user${privacy?.flagged ? " proto-privacy" : ""}`} style={{ maxWidth: 335 }}>
-          {privacy?.flagged ? highlightPII(user2, privacy.spans, offLabel?.term) : user2}
+        <div className="proto-turn is-user">
+          <div className={`proto-user${privacy?.flagged ? " proto-privacy" : ""}`}>
+            {privacy?.flagged ? highlightPII(user2, privacy.spans, offLabel?.term) : user2}
+          </div>
         </div>
       )}
-      {stage === "parsing2" && <StatusLine text="正在根据拜访记录组织说明…" />}
+      {stage === "parsing2" && <StatusLine busy text="解析中" />}
       {(stage === "parsing2" || after(stage, "todo")) && (
         <TypedReply text={narratives[1]} streaming={streaming && stage === "parsing2"} />
       )}
@@ -976,12 +1417,12 @@ function Post({
               <p>已识别到了潜在的后续拜访计划。最终确认后才会保存为跟进任务。您可以选择采纳或忽略该建议。</p>
               <div className="row"><span>拜访日期</span>{suggestion.date}</div>
               <div className="row"><span>拜访材料</span>{suggestion.material}</div>
-              {todo ? (
-                <p className="proto-note">{todo === "adopt" ? "已选择创建跟进任务，最终提交拜访后生效。" : "已为您忽略此建议。"}</p>
-              ) : (
+              {todo === "ignore" ? (
+                <button type="button" className="proto-btn" disabled>已忽略</button>
+              ) : todo === "adopt" ? null : (
                 <div className="actions">
-                  <button onClick={() => onTodo("ignore")}>忽略</button>
-                  <button className="primary" onClick={() => onTodo("adopt")}>采纳</button>
+                  <button type="button" onClick={() => onTodo("ignore")}>忽略</button>
+                  <button type="button" className="primary" onClick={() => onTodo("adopt")}>采纳</button>
                 </div>
               )}
             </article>
@@ -994,7 +1435,6 @@ function Post({
                   <img src={`${A}ad-cover.png`} alt="" />
                   <p>{article.title}</p>
                 </div>
-                <p className="proto-note">演示资料，可在后续准备中继续查询。</p>
               </article>
             </>
           )}
@@ -1033,38 +1473,53 @@ function Post({
 }
 
 function Composer({
-  value, listening, showSubmit, pre, onChange, onVoice, onSend, onSubmitVisit,
+  value, listening, loading, waking, showFill, showSubmit, idle, placeholder, onChange, onFill, onVoice, onSend, onSubmitVisit,
 }: {
-  value: string; listening: boolean; showSubmit: boolean; pre: boolean;
-  onChange: (v: string) => void; onVoice: () => void; onSend: () => void; onSubmitVisit: () => void;
+  value: string; listening: boolean; loading?: boolean; waking?: boolean; showFill?: boolean; showSubmit: boolean; idle?: boolean; placeholder?: string;
+  onChange: (v: string) => void; onFill?: () => void; onVoice: () => void; onSend: () => void; onSubmitVisit: () => void;
 }) {
+  const canSend = Boolean(value.trim()) && !loading;
+  const hint = listening
+    ? "正在听写，再次点击麦克风结束"
+    : waking
+      ? "演示服务启动中"
+      : "AI生成内容仅供参考";
   return (
-    <footer className="proto-composer">
-      {showSubmit && (
-        <button className="submit" onClick={onSubmitVisit}>
-          <img src={`${A}check.svg`} alt="" />
-          提交拜访
-        </button>
+    <footer className={`proto-composer${showFill || showSubmit ? " has-submit" : ""}${idle ? " is-idle" : ""}`}>
+      {(showFill || showSubmit) && (
+        <div className="proto-composer-actions">
+          {showFill && (
+            <button type="button" className="submit" onClick={onFill}>试填一段模拟拜访反馈</button>
+          )}
+          {showSubmit && (
+            <button type="button" className="submit" onClick={onSubmitVisit}>
+              <img src={`${A}check.svg`} alt="" />
+              提交拜访
+            </button>
+          )}
+        </div>
       )}
-      <div className={`proto-input${pre ? " pre" : ""}`}>
+      <div className={`proto-input${listening ? " listening" : ""}${idle ? " is-idle" : ""}`}>
         <textarea
           aria-label="发消息"
           value={value}
-          placeholder={listening ? "正在听写…" : "发消息给Concierge"}
+          placeholder={listening ? "正在听写…" : placeholder ?? "发消息给拜访助手"}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              onSend();
+              if (canSend) onSend();
             }
           }}
         />
-        <button className={`mic${listening ? " on" : ""}`} aria-label="语音录入" onClick={onVoice}>
+        <button className={`mic${listening ? " on" : ""}`} aria-label={listening ? "结束语音录入" : "语音录入"} onClick={onVoice}>
           <img src={`${A}mic.svg`} alt="" />
         </button>
+        <button className="send" aria-label="发送" disabled={!canSend} onClick={onSend}>
+          <img src={`${A}arrow.svg`} alt="" />
+        </button>
       </div>
-      <p className="proto-foot">AI生成内容仅供参考</p>
-      <i className="proto-homebar" />
+      <p className={`proto-foot${waking ? " is-waking" : ""}`}>{hint}</p>
     </footer>
   );
 }

@@ -127,5 +127,68 @@
     "query": "上次拜访还缺什么待办？",
     "mode": "auto",
     "expect_route": "customer_insight"
+  },
+  {
+    "id": "PRODUCT-QA-001",
+    "mode": "auto",
+    "customer_id": "bian-xiaoyan",
+    "query": "达必拓是什么",
+    "expect_route": "material_recommendation",
+    "expect_skill": "material_recommendation",
+    "expect_citation": true,
+    "expect_reply_contains": "达必妥",
+    "expect_reply_not_contains": "完成访前准备"
+  },
+  {
+    "id": "IDLE-PRODUCT-001",
+    "mode": "auto",
+    "customer_id": null,
+    "query": "达必拓是什么",
+    "expect_route": "material_recommendation",
+    "expect_skill": "material_recommendation",
+    "expect_citation": true,
+    "expect_reply_contains": "达必妥",
+    "expect_reply_not_contains": "完成访前准备"
+  },
+  {
+    "id": "IDLE-PREP-001",
+    "mode": "auto",
+    "customer_id": null,
+    "query": "帮我准备今天的续方拜访",
+    "expect_route": "need_customer",
+    "expect_skill": "need_customer",
+    "expect_citation": false,
+    "expect_reply_not_contains": "完成访前准备"
+  },
+  {
+    "id": "OFFTOPIC-001",
+    "mode": "auto",
+    "customer_id": "liu-min",
+    "query": "2222",
+    "expect_route": "capability_guide",
+    "expect_skill": "capability_guide",
+    "expect_citation": false,
+    "expect_reply_contains": "超出",
+    "expect_reply_not_contains": "完成访前准备"
+  },
+  {
+    "id": "OFFTOPIC-002",
+    "mode": "auto",
+    "customer_id": "liu-min",
+    "query": "今天天气怎么样",
+    "expect_route": "capability_guide",
+    "expect_skill": "capability_guide",
+    "expect_citation": false,
+    "expect_reply_contains": "超出",
+    "expect_reply_not_contains": "完成访前准备"
+  },
+  {
+    "id": "NAME-PREP-001",
+    "mode": "auto",
+    "customer_id": "liu-min",
+    "query": "刘敏主任",
+    "expect_route": "pre_visit",
+    "expect_skill": "pre_visit_preparation",
+    "expect_reply_contains": "刘敏"
   }
 ]

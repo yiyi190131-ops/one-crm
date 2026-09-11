@@ -93,9 +93,10 @@ async def llm_classify_intent(query: str) -> str | None:
     """用模型判定路由；不可用或结果非法时返回 None（交由关键词兜底）。"""
     system = (
         "你是医药代表 CRM Agent 的意图路由器。只输出 JSON：{\"route\": <route>}。"
-        "route 取值仅限：pre_visit(访前准备)、post_visit(访后记录)、customer_insight(客户互动洞察)、"
-        "material_recommendation(材料/文章推荐)、institution_access(机构进药/准入/供应)、"
-        "capability_guide(询问你能做什么)、guardrail(超适应症或高风险医学问题，如银屑病等非批准适应症)。"
+        "route 取值仅限：pre_visit(明确要求做访前准备/拜访重点/开场)、post_visit(访后记录)、customer_insight(客户互动洞察)、"
+        "material_recommendation(问药品或资料是什么、介绍产品、推荐材料)、institution_access(机构进药/准入/供应)、"
+        "capability_guide(询问你能做什么，或与拜访无关的问题如数字、乱码、天气)、guardrail(超适应症或高风险医学问题，如银屑病等非批准适应症)。"
+        "乱码、纯数字、天气等与拜访无关的输入必须走 capability_guide。不要把普通问答默认成访前准备。只有明确要求访前准备/拜访重点/开场，或只发了医生姓名时才用 pre_visit。"
     )
     content = await _chat(
         [{"role": "system", "content": system}, {"role": "user", "content": query}],
@@ -146,7 +147,7 @@ def compose_messages(user_query: str, grounding: str, history: str = "") -> list
     prior = f"\n\n此前同一医生会话：\n{history}\n" if history else ""
     return [
         {"role": "system", "content": _COMPOSE_SYSTEM},
-        {"role": "user", "content": f"代表问题：{user_query}{prior}\n已取回数据：\n{grounding}\n\n请据此自然作答；可承接此前对话，但不得引入已取回数据之外的事实。"},
+        {"role": "user", "content": f"代表问题：{user_query}{prior}\n已取回数据：\n{grounding}\n\n请直接回答当前问题，不要改写成访前准备或客户简报。可承接此前对话，但不得引入已取回数据之外的事实。"},
     ]
 
 

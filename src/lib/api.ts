@@ -28,7 +28,7 @@ export const api = {
     postJSON<AgentResponse>("/agent", body),
   listConversations: (userId: string) => getJSON<ConversationSummary[]>(`/conversations?user_id=${userId}`),
   getConversation: (id: string, userId: string) => getJSON<ConversationDetail>(`/conversations/${id}?user_id=${userId}`),
-  createConversation: (body: { user_id: string; customer_id: string }) => postJSON<ConversationSummary>("/conversations", body),
+  createConversation: (body: { user_id: string; customer_id: string; force_new?: boolean }) => postJSON<ConversationSummary>("/conversations", body),
   addVisitSession: (conversationId: string, body: { user_id: string; seconds: number; shown_aids: DetailAid[] }) =>
     postJSON<{ ok: boolean }>(`/conversations/${conversationId}/events`, { kind: "visit_session", ...body }),
   developerRuns: (conversationId: string) => getJSON<DeveloperRun[]>(`/developer/runs?conversation_id=${conversationId}`),

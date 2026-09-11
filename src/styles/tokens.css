@@ -40,8 +40,8 @@
   /* 手机尺寸（迁移期与旧屏保持一致，全站一处可改） */
   --phone-w: 375px;
   --phone-h: 812px;
-  --topbar-h: 52px;
-  --composer-h: 120px;
+  --topbar-h: 72px;
+  --composer-h: 108px;
 
   /* 时序 */
   --dur-fast: 120ms;

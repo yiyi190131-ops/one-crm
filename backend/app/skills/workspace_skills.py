@@ -17,13 +17,13 @@ def run_customer_insight_skill(_: str, customer_id: str = "liu-min") -> dict:
     }
 
 
-def run_material_recommendation_skill(query: str, customer_id: str = "liu-min") -> dict:
-    context = read_customer_context(customer_id)
-    evidence = retrieve_approved_evidence(query, context["last_feedback"])
+def run_material_recommendation_skill(query: str, customer_id: str | None = "liu-min") -> dict:
+    context = read_customer_context(customer_id) if customer_id else {}
+    evidence = retrieve_approved_evidence(query, context.get("last_feedback", ""))
     return {
         "skill_id": "material_recommendation",
         "skill_version": "1.0.0",
-        "context": read_customer_context(customer_id),
+        "context": context,
         "evidence": evidence,
         "sources": evidence["documents"],
         "summary": "；".join(d["title"] for d in evidence["documents"]) or "未找到相关有效演示材料，请补充主题或联系医学团队。",
