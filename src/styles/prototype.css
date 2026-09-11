@@ -676,7 +676,8 @@
 }
 .proto-composer .submit img {
   width: 18px;
-  height: 10px;
+  height: 18px;
+  object-fit: contain;
 }
 .proto-input {
   position: relative;
@@ -999,12 +1000,6 @@
   height: 24px;
   border-radius: 6px;
 }
-.proto-aid-head .plus {
-  margin-left: auto;
-  width: 60px;
-  height: 56px;
-  border-left: 1px solid #d9d9d9;
-}
 .proto-aid-body {
   flex: 1;
   min-height: 0;
@@ -1054,8 +1049,10 @@
   letter-spacing: -0.5px;
 }
 .proto-aid-bar img {
+  flex: none;
   width: 24px;
   height: 24px;
+  object-fit: contain;
 }
 .proto-note {
   margin-top: 12px;

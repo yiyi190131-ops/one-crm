@@ -377,9 +377,6 @@ function Aid({
           <img src={`${A}aid-icon.png`} alt="" />
           拜访材料
         </div>
-        <button className="plus" aria-label="更多">
-          <img src={`${A}aid-plus.svg`} alt="" />
-        </button>
       </div>
       <div className="proto-aid-body">
         <h2>达必妥®优势一：持久控制</h2>

@@ -20,9 +20,15 @@ DEFAULT_CUSTOMER = "liu-min"
 _HELP_PHRASES = ("你能做什么", "可以做什么", "有什么功能", "能帮我什么", "如何使用", "帮助")
 _DOMAIN_HINTS = (
     "访前", "访后", "拜访", "医生", "主任", "客户", "达必妥", "达必拓", "度普利尤",
-    "材料", "资料", "文献", "文章", "互动", "待办", "洞察", "进药", "机构", "准入",
+    "材料", "资料", "文献", "文章", "互动", "待办", "洞察", "进药", "进院", "机构", "准入",
     "开场", "观念", "手卡", "准备", "安全", "适应症", "医院", "科室", "记录",
 )
+_GUIDE_PHRASES: dict[str, Route] = {
+    "医生信息查询": "customer_insight",
+    "拜访历史回顾": "customer_insight",
+    "智能拜访建议": "pre_visit",
+    "进院状态查询": "institution_access",
+}
 _GUIDE_BODY = (
     "我可以帮你完成五类工作：\n"
     "1. 客户洞察：查看近期互动、观念和待办；\n"
@@ -98,6 +104,9 @@ def _keyword_route(query: str, mode: str) -> Route:
         return "guardrail"
     if _asked_help(query):
         return "capability_guide"
+    for phrase, route in _GUIDE_PHRASES.items():
+        if phrase in query:
+            return route
     if any(word in query for word in ("访后", "拜访反馈", "记录本次", "记录医生反馈")):
         return "post_visit"
     if any(word in query for word in ("互动", "洞察", "最近", "历史", "客户360", "上次", "待办", "观念阶梯")):
@@ -110,7 +119,7 @@ def _keyword_route(query: str, mode: str) -> Route:
         phrase in query for phrase in ("准备", "拜访", "访前", "开场", "待办")
     ):
         return "material_recommendation"
-    if any(word in query for word in ("机构", "进药", "准入", "院内", "供应", "运营")):
+    if any(word in query for word in ("机构", "进药", "进院", "准入", "院内", "供应", "运营")):
         return "institution_access"
     if any(phrase in query for phrase in ("访前", "帮我准备", "拜访重点", "续方拜访", "开场")):
         return "pre_visit"

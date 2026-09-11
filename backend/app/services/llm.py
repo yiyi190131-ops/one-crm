@@ -94,7 +94,7 @@ async def llm_classify_intent(query: str) -> str | None:
     system = (
         "你是医药代表 CRM Agent 的意图路由器。只输出 JSON：{\"route\": <route>}。"
         "route 取值仅限：pre_visit(明确要求做访前准备/拜访重点/开场)、post_visit(访后记录)、customer_insight(客户互动洞察)、"
-        "material_recommendation(问药品或资料是什么、介绍产品、推荐材料)、institution_access(机构进药/准入/供应)、"
+        "material_recommendation(问药品或资料是什么、介绍产品、推荐材料)、institution_access(机构进药/进院/准入/供应)、"
         "capability_guide(询问你能做什么，或与拜访无关的问题如数字、乱码、天气)、guardrail(超适应症或高风险医学问题，如银屑病等非批准适应症)。"
         "乱码、纯数字、天气等与拜访无关的输入必须走 capability_guide。不要把普通问答默认成访前准备。只有明确要求访前准备/拜访重点/开场，或只发了医生姓名时才用 pre_visit。"
     )

@@ -190,5 +190,56 @@
     "expect_route": "pre_visit",
     "expect_skill": "pre_visit_preparation",
     "expect_reply_contains": "刘敏"
+  },
+  {
+    "id": "INSTITUTION-JINYUAN",
+    "mode": "auto",
+    "customer_id": "liu-min",
+    "query": "进院状态查询",
+    "expect_route": "institution_access",
+    "expect_skill": "institution_access",
+    "expect_citation": false,
+    "expect_reply_contains": "目录状态",
+    "expect_reply_not_contains": "超出"
+  },
+  {
+    "id": "IDLE-JINYUAN-001",
+    "mode": "auto",
+    "customer_id": null,
+    "query": "进院状态查询",
+    "expect_route": "need_customer",
+    "expect_skill": "need_customer",
+    "expect_citation": false,
+    "expect_reply_not_contains": "超出"
+  },
+  {
+    "id": "GUIDE-PHRASE-INSIGHT",
+    "mode": "auto",
+    "customer_id": "liu-min",
+    "query": "医生信息查询",
+    "expect_route": "customer_insight",
+    "expect_skill": "customer_insight",
+    "expect_reply_not_contains": "超出"
+  },
+  {
+    "id": "PRE-BIAN-001",
+    "mode": "auto",
+    "customer_id": "bian-xiaoyan",
+    "query": "卞小燕主任",
+    "expect_route": "pre_visit",
+    "expect_skill": "pre_visit_preparation",
+    "expect_citation": true,
+    "expect_reply_contains": "卞小燕",
+    "expect_reply_not_contains": "未找到相关有效材料"
+  },
+  {
+    "id": "MATERIAL-BIAN-001",
+    "mode": "auto",
+    "customer_id": "bian-xiaoyan",
+    "query": "有其他合适的拜访材料吗",
+    "expect_route": "material_recommendation",
+    "expect_skill": "material_recommendation",
+    "expect_citation": true,
+    "expect_reply_not_contains": "未检索到"
   }
 ]

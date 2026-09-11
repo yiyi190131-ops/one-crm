@@ -1274,7 +1274,6 @@ function Aid({ aid, note, onBack, onShare, onRemote, onSubmit }: { aid: DetailAi
       <div className="proto-aid-head">
         <button aria-label="返回" onClick={onBack}><img src={`${A}aid-back.svg`} alt="" /></button>
         <div className="pill"><img src={`${A}aid-icon.png`} alt="" />拜访材料</div>
-        <button className="plus" aria-label="更多"><img src={`${A}aid-plus.svg`} alt="" /></button>
       </div>
       <div className="proto-aid-body">
         <img className="chart" src={`${A}aid-long.png`} alt={aid?.title ?? "拜访材料"} />

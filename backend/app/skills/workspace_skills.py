@@ -1,6 +1,7 @@
 """可版本化的工作台 Skill；所有数据均经只读工具取得。"""
 
-from app.services.demo_data import MATERIAL_SOURCE, crm_interaction_source, institution_source
+from app.services.demo_data import crm_interaction_source, institution_source
+from app.services.evidence import customer_search_context
 from app.services.tools import read_customer_context, read_institution_status, retrieve_approved_evidence
 
 
@@ -19,7 +20,7 @@ def run_customer_insight_skill(_: str, customer_id: str = "liu-min") -> dict:
 
 def run_material_recommendation_skill(query: str, customer_id: str | None = "liu-min") -> dict:
     context = read_customer_context(customer_id) if customer_id else {}
-    evidence = retrieve_approved_evidence(query, context.get("last_feedback", ""))
+    evidence = retrieve_approved_evidence(query, customer_search_context(context))
     return {
         "skill_id": "material_recommendation",
         "skill_version": "1.0.0",
