@@ -3,8 +3,8 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const ATTEMPTS = 3;
-const TIMEOUT_MS = 20_000;
+/** Render 冷启动常超过 20s；中途 abort 会打断正在唤醒的那次连接。 */
+const TIMEOUT_MS = 55_000;
 
 async function pingHealth(): Promise<boolean> {
   const backend = (process.env.BACKEND_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
@@ -21,8 +21,6 @@ async function pingHealth(): Promise<boolean> {
 }
 
 export async function GET() {
-  for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
-    if (await pingHealth()) return NextResponse.json({ ok: true });
-  }
+  if (await pingHealth()) return NextResponse.json({ ok: true });
   return NextResponse.json({ ok: false }, { status: 503 });
 }

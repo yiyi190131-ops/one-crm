@@ -28,14 +28,15 @@ npm run dev
 
 ## 线上演示
 
-不要把 Render 的整包 Docker 地址当作演示入口：免费实例休眠后再打开会先出现 Render 启动页，应用改不掉这张页。
+不要把 Render 地址当作演示入口：免费实例休眠后再打开会先出现 Render 启动页，应用改不掉这张页。仓库里的 Docker 镜像现在只跑 FastAPI，冷启动比「Next + Python」整包快很多，但休眠唤醒仍然要等。
 
 推荐拆开部署：
 
 1. **前端用 Vercel 域名**（面试/演示只发这个链接）。在 Vercel 设置 `BACKEND_URL` 为 FastAPI 地址，例如 `https://<your-service>.onrender.com`。浏览器仍访问同源 `/api`，由 Next 反代到后端。
-2. **后端只跑 FastAPI**（uvicorn，端口与 Render `PORT` 对齐），用 SQLite 持久化会话。不要再把 Next 和 Python 打进同一个会休眠的 Web Service 当入口。
-3. 打开页面会立刻看到拜访助手，并请求 `/api/wake` 去敲后端 `/health`。Vercel Cron 每 10 分钟打一次 `/api/wake` 尽量保活（Hobby 套餐 Cron 可能被限制为每天一次，需要更稳就升 Pro，或把 Render 升到 Starter 常驻）。
-4. 若必须 100% 去掉冷启动，将 Render 改为付费常驻，或换不休眠的主机；演示链接仍然用 Vercel。
+2. **后端只跑 FastAPI**（`API_ONLY=1`，uvicorn 监听 Render 的 `PORT`），用 SQLite 持久化会话。可选设置 `FRONTEND_URL` 为 Vercel 域名，误开 API 域名会跳转到前端。
+3. 打开 Vercel 页面会立刻看到拜访助手；`/api/wake` 在后台敲 `/health`，不再用客户列表请求堵住首屏。
+4. **免费保活**：仓库已带 `render.yaml`（Render Blueprint，API-only）和 GitHub Actions `keep-alive`（每 10 分钟请求 `/api/wake`）。在仓库 Secrets 设 `WAKE_URL=https://<vercel域名>/api/wake`。Vercel Hobby 自带 Cron 可能每天仅一次，以 Actions 为准。
+5. 若必须 100% 去掉冷启动，将 Render 改为付费常驻；演示入口仍然只用 Vercel。
 
 ## 推荐体验
 

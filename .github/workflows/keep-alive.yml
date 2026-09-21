@@ -1,0 +1,19 @@
+# 免费保活：每 10 分钟敲一次 Vercel /api/wake，尽量避免 Render 休眠。
+name: keep-alive
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping wake endpoint
+        env:
+          WAKE_URL: ${{ secrets.WAKE_URL }}
+        run: |
+          if [ -z "$WAKE_URL" ]; then
+            echo "Set repository secret WAKE_URL to https://<your-vercel-app>.vercel.app/api/wake"
+            exit 0
+          fi
+          curl -fsS --max-time 60 "$WAKE_URL" || true

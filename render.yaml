@@ -1,0 +1,17 @@
+# Free Render Blueprint：只跑 FastAPI。
+# 导入：https://dashboard.render.com/blueprints
+services:
+  - type: web
+    name: one-crm-api
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: API_ONLY
+        value: "1"
+      - key: AI_PROVIDER
+        value: local
+      - key: DATA_DIR
+        value: /tmp
+      - key: FRONTEND_URL
+        sync: false

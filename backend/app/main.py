@@ -1,12 +1,13 @@
 import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -31,9 +32,10 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
+_frontend = (os.environ.get("FRONTEND_URL") or "").rstrip("/")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", *([_frontend] if _frontend else [])],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -282,6 +284,13 @@ async def finalize_reply(request: AgentRequest, result: dict) -> None:
         reply, model_mode = await llm_compose(request.message, grounding, result.get("fallback") or result["reply"], result.get("history") or "")
         result["reply"] = reply
         result["model_mode"] = model_mode
+
+
+@app.get("/")
+def root():
+    if _frontend:
+        return RedirectResponse(_frontend)
+    return {"status": "ok", "service": "crm-agent-api", "health": "/health"}
 
 
 @app.get("/health")

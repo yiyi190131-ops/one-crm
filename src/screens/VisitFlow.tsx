@@ -5,6 +5,7 @@ import { Children, useEffect, useLayoutEffect, useRef, useState, type ReactNode 
 import type { AgentResponse, ConversationSummary, Customer, DetailAid, HomeTurn, LadderUpdate, VisitSession } from "@/lib/types";
 import { DEMO_CUSTOMERS } from "@/lib/demo-customers";
 import { demoUserId } from "@/lib/session";
+import { timedFetch, wakeBackend } from "@/lib/wake";
 
 const A = "/figma/proto/";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
@@ -194,33 +195,21 @@ export function VisitFlow() {
 
   async function loadAids(customerId: string) {
     try {
-      const res = await fetch(`${API_BASE}/detail-aids?customer_id=${customerId}`);
+      const res = await timedFetch(`${API_BASE}/detail-aids?customer_id=${customerId}`, {}, 8000);
       if (!res.ok) return;
       const data = (await res.json()) as { aids: DetailAid[] };
       setDetailAids(data.aids ?? []);
     } catch { /* 手卡空态 */ }
   }
 
-  async function wakeBackend() {
-    setWaking(true);
-    try {
-      const res = await fetch("/api/wake", { cache: "no-store" });
-      return res.ok;
-    } catch {
-      return false;
-    } finally {
-      setWaking(false);
-    }
-  }
-
   async function bindCustomer(next: Customer) {
     const existingId = conversationRef.current;
     if (!existingId) {
-      const res = await fetch(`${API_BASE}/conversations`, {
+      const res = await timedFetch(`${API_BASE}/conversations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: demoUserId(), customer_id: next.id, force_new: true }),
-      });
+      }, 20_000);
       if (!res.ok) throw new Error("bind");
       const conversation = (await res.json()) as { id: string };
       conversationRef.current = conversation.id;
@@ -243,14 +232,14 @@ export function VisitFlow() {
 
   async function loadConversations() {
     try {
-      const res = await fetch(`${API_BASE}/conversations?user_id=${demoUserId()}`);
+      const res = await timedFetch(`${API_BASE}/conversations?user_id=${demoUserId()}`);
       if (!res.ok) return;
       setConversations((await res.json()) as ConversationSummary[]);
     } catch { /* 菜单空态 */ }
   }
 
   async function loadThread(conversationId: string) {
-    const res = await fetch(`${API_BASE}/conversations/${conversationId}?user_id=${demoUserId()}`);
+    const res = await timedFetch(`${API_BASE}/conversations/${conversationId}?user_id=${demoUserId()}`, {}, 12_000);
     if (!res.ok) throw new Error("thread");
     const conv = (await res.json()) as { turns?: Array<Partial<HomeTurn> & { text: string; role: HomeTurn["role"] }> };
     const loaded = hydrateTurns(conv.turns ?? []);
@@ -325,20 +314,24 @@ export function VisitFlow() {
 
   useEffect(() => {
     let cancelled = false;
-    void fetch("/api/wake", { cache: "no-store" })
-      .catch(() => undefined)
-      .finally(() => { if (!cancelled) setWaking(false); });
+    const showUi = window.setTimeout(() => {
+      if (!cancelled) setWaking(false);
+    }, 400);
 
     void (async () => {
+      const ready = await wakeBackend();
+      if (cancelled) return;
+      setWaking(false);
+      if (!ready) return;
       try {
-        const res = await fetch(`${API_BASE}/customers?user_id=${demoUserId()}`);
+        const res = await timedFetch(`${API_BASE}/customers?user_id=${demoUserId()}`);
         if (!res.ok) throw new Error("customers");
         const list = (await res.json()) as Customer[];
         if (cancelled || !list.length) return;
         setCustomers(list);
         const savedId = window.localStorage.getItem("crm-agent-conversation");
         if (!savedId) return;
-        const convRes = await fetch(`${API_BASE}/conversations/${savedId}?user_id=${demoUserId()}`);
+        const convRes = await timedFetch(`${API_BASE}/conversations/${savedId}?user_id=${demoUserId()}`);
         if (!convRes.ok) return;
         const conv = (await convRes.json()) as { id: string; customer_id?: string | null };
         conversationRef.current = conv.id;
@@ -356,7 +349,10 @@ export function VisitFlow() {
         /* 静态医生列表已可点，不阻塞首屏 */
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      window.clearTimeout(showUi);
+    };
   }, []);
 
   async function chooseDoctor(next: Customer) {
@@ -444,7 +440,7 @@ export function VisitFlow() {
     setMenuOpen(false);
     setPickError(null);
     try {
-      const res = await fetch(`${API_BASE}/conversations/${id}?user_id=${demoUserId()}`);
+      const res = await timedFetch(`${API_BASE}/conversations/${id}?user_id=${demoUserId()}`, {}, 12_000);
       if (!res.ok) throw new Error("thread");
       const conv = (await res.json()) as ConversationSummary & { turns?: Array<Partial<HomeTurn> & { text: string; role: HomeTurn["role"] }> };
       const matched = customers.find((item) => item.id === conv.customer_id) ?? null;
