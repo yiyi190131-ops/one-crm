@@ -69,14 +69,17 @@ Next.js 16 / React 19；FastAPI / LangGraph / SQLAlchemy / SQLite。
 
 ## 可选模型
 
-在 `backend/.env` 中按 `.env.example` 配置，然后从 backend 目录启动后端（或通过终端环境变量传入）。不要将真实 Key 放入前端或对外代码包。
+在 `backend/.env` 中按 `.env.example` 配置（或在 Vercel / 后端托管环境写入同名变量）。不要把真实 Key 放进前端。
+
+- `AI_PROVIDER=local`：规则 + 工具，演示可离线跑通。
+- `AI_PROVIDER=deepseek` + `DEEPSEEK_API_KEY`：模型参与意图理解、访后抽取、口语组织；事实与红线仍由工具决定。
 
 ```bash
 cd backend
 PYTHONPATH=. .venv/bin/python -m uvicorn app.main:app --port 8000
 ```
 
-本轮未使用外部 API Key，验证结论覆盖 local 模式，不代表已验证 DeepSeek 的线上响应质量。
+线上想更「像 AI」：给 FastAPI 项目配置 `AI_PROVIDER=deepseek` 与 `DEEPSEEK_API_KEY` 后重新部署即可。
 
 ## 验证
 

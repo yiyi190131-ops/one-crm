@@ -194,7 +194,6 @@ export function VisitFlow() {
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuQuery, setMenuQuery] = useState("");
-  const [showPreDoctors, setShowPreDoctors] = useState(false);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const conversationRef = useRef<string | null>(null);
@@ -417,7 +416,6 @@ export function VisitFlow() {
     const startPost = intentRef.current === "post";
     intentRef.current = null;
     setPickError(null);
-    setShowPreDoctors(false);
     setInput("");
     setScreen("home");
     try {
@@ -489,7 +487,6 @@ export function VisitFlow() {
     setScreen("home");
     setMenuOpen(false);
     intentRef.current = null;
-    setShowPreDoctors(false);
     setMenuQuery("");
   }
 
@@ -510,7 +507,6 @@ export function VisitFlow() {
       setAidNote(null);
       setInput("");
       intentRef.current = null;
-      setShowPreDoctors(false);
     } catch {
       setPickError("无法打开这条聊天记录。");
     }
@@ -538,11 +534,9 @@ export function VisitFlow() {
     }
     if (q === "访前准备") {
       intentRef.current = "pre";
-      setShowPreDoctors(true);
     }
     if (q === "访后记录") {
       intentRef.current = "post";
-      setShowPreDoctors(true);
     }
     setInput("");
     const data = await pushExchange(q, "auto");
@@ -937,6 +931,7 @@ export function VisitFlow() {
                       turn={turn}
                       customer={customer}
                       streaming={loading && turn.id === lastTurn?.id && turn.role === "assistant" && !showPost}
+                      onAsk={sendPre}
                       onOpenMaterial={(aid) => { setActiveAid(aid); setActiveSeconds(0); setScreen("aid"); }}
                     />
                   ))}
@@ -1194,10 +1189,11 @@ function Staggered({ streaming, children, step = EVIDENCE_STEP_MS }: { streaming
   );
 }
 
-function TurnBlock({ turn, customer, streaming, onOpenMaterial }: {
+function TurnBlock({ turn, customer, streaming, onAsk, onOpenMaterial }: {
   turn: ThreadTurn;
   customer: Customer | null;
   streaming: boolean;
+  onAsk?: (q: string) => void;
   onOpenMaterial: (aid: DetailAid) => void;
 }) {
   if (turn.kind === "visit_session") {
@@ -1235,6 +1231,13 @@ function TurnBlock({ turn, customer, streaming, onOpenMaterial }: {
         <Staggered streaming={streaming}>
           <HospitalEvidence customer={customer} />
         </Staggered>
+      )}
+      {route === "clarify" && onAsk && !streaming && (
+        <div className="proto-chips" style={{ marginTop: 12 }}>
+          <Chip text="该医生最近有哪些互动记录？" onAsk={onAsk} />
+          <Chip text="帮我做访前准备" onAsk={onAsk} />
+          <Chip text="进院状态查询" onAsk={onAsk} />
+        </div>
       )}
       {route === "guardrail" && (
         <Staggered streaming={streaming}>

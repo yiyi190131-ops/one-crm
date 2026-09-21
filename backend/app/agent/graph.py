@@ -23,6 +23,7 @@ Route = Literal[
     "capability_guide",
     "need_customer",
     "customer_not_found",
+    "clarify",
     "guardrail",
 ]
 _CUSTOMER_ROUTES = {"pre_visit", "post_visit", "customer_insight", "institution_access"}
@@ -32,8 +33,13 @@ _HELP_PHRASES = ("你能做什么", "可以做什么", "有什么功能", "能�
 _DOMAIN_HINTS = (
     "访前", "访后", "拜访", "医生", "主任", "客户", "达必妥", "达必拓", "度普利尤",
     "材料", "资料", "文献", "文章", "互动", "待办", "洞察", "进药", "进院", "机构", "准入",
-    "开场", "观念", "手卡", "准备", "安全", "适应症", "医院", "科室", "记录",
+    "开场", "观念", "手卡", "准备", "安全", "适应症", "医院", "科室", "记录", "反馈", "阶梯",
 )
+_CLARIFY_HINTS = (
+    "帮我", "看看", "怎么样", "如何", "怎么办", "那个", "这个", "再说", "继续", "然后",
+    "讲讲", "说下", "了解", "想问", "请问", "有点", "不太清", "什么意思", "再确认", "嗯",
+)
+_OFFTOPIC_HARD = ("天气", "下雨", "股票", "彩票", "笑话", "外卖", "打车", "足球", "篮球", "游戏")
 _GUIDE_PHRASES: dict[str, Route] = {
     "医生信息查询": "customer_insight",
     "拜访历史回顾": "customer_insight",
@@ -48,6 +54,14 @@ _GUIDE_BODY = (
     "4. 机构准入：查询进药、覆盖和供应风险；\n"
     "5. 访后记录：从语音或文本生成草稿，确认后再写入 CRM。\n\n"
     "你可以直接说，例如“查一下刘敏主任最近的互动记录”。"
+)
+_CLARIFY_BODY = (
+    "我还没完全理解你的意思，我们先对齐一下。你更想做哪一件？\n"
+    "1. 查医生近期互动、观念或待办\n"
+    "2. 做访前准备 / 找已审批材料\n"
+    "3. 记一条访后反馈\n"
+    "4. 看院内进药或供应情况\n\n"
+    "直接回一句具体需求就行，例如“查一下刘敏主任最近互动”。"
 )
 _NAME_BLOCK = {
     "该", "这", "那", "某", "贵", "本", "您", "你", "他", "她", "我", "们", "的", "和", "与",
@@ -87,6 +101,7 @@ def append_trace(state: AgentState, label: str, detail: str, status: str = "done
 _PLANS: dict[str, list[str]] = {
     "guardrail": ["合规预检"],
     "capability_guide": ["说明当前可用业务能力"],
+    "clarify": ["澄清代表意图"],
     "need_customer": ["确认拜访对象"],
     "customer_not_found": ["核对客户名单"],
     "post_visit": ["抽取访后关键信息", "隐私与字段校验", "生成待确认 CRM 草稿"],
@@ -140,11 +155,21 @@ def _asked_help(query: str) -> bool:
 
 
 def _is_offtopic(query: str) -> bool:
+    """仅「完全无关」才视为超范围；含糊但可能跟拜访有关的走澄清。"""
     if _asked_help(query):
         return False
     if _known_customer_hit(query) or _unknown_doctor_label(query):
         return False
+    if any(word in query for word in _OFFTOPIC_HARD):
+        return True
+    if re.fullmatch(r"\d+", query or ""):
+        return True
     if any(word in query for word in _DOMAIN_HINTS):
+        return False
+    if any(word in query for word in _CLARIFY_HINTS):
+        return False
+    # 短中文业务口语优先澄清，不直接判超范围
+    if any("\u4e00" <= ch <= "\u9fff" for ch in query) and len(query) <= 24:
         return False
     return True
 
@@ -180,7 +205,10 @@ def _keyword_route(query: str, mode: str) -> Route:
         return "pre_visit"
     if _known_customer_hit(query):
         return "pre_visit"
-    return "capability_guide"
+    # 完全无关 → 能力说明；其余含糊表达 → 先澄清，不直接说超出能力。
+    if _is_offtopic(query):
+        return "capability_guide"
+    return "clarify"
 
 
 async def planner(state: AgentState) -> AgentState:
@@ -188,16 +216,29 @@ async def planner(state: AgentState) -> AgentState:
     keyword_route = _keyword_route(query, state["mode"])
     route: Route = keyword_route
 
-    # 未命中关键词的自然语言才让模型分类；数字/乱码/无业务词不再改写成访前。
+    # 未命中明确关键词时，允许模型细分；结果仍须在白名单内。
     if (
-        keyword_route == "capability_guide"
+        keyword_route in {"capability_guide", "clarify"}
         and state["mode"] != "post"
         and not _asked_help(query)
         and not _is_offtopic(query)
     ):
         llm_route = await llm_classify_intent(state["query"])
-        if llm_route:
+        if llm_route in {
+            "pre_visit",
+            "post_visit",
+            "customer_insight",
+            "material_recommendation",
+            "institution_access",
+            "clarify",
+            "capability_guide",
+            "guardrail",
+        }:
             route = llm_route  # type: ignore[assignment]
+
+    # 模型若仍判成能力说明，但并非完全无关/求助，改为澄清追问。
+    if route == "capability_guide" and not _asked_help(query) and not _is_offtopic(query):
+        route = "clarify"
 
     if not (state.get("customer_id") or "").strip() and route in _CUSTOMER_ROUTES:
         route = "need_customer"
@@ -222,7 +263,7 @@ async def guardrail(state: AgentState) -> AgentState:
 
 async def capability_guide(state: AgentState) -> AgentState:
     query = state["query"].replace(" ", "")
-    prefix = "" if _asked_help(query) else "这个问题暂时超出了我的能力范围。我目前只能帮你处理拜访相关的事。\n\n"
+    prefix = "" if _asked_help(query) else "这个问题跟拜访工作关系不大，我暂时帮不上。我目前只能处理拜访相关的事。\n\n"
     return {
         "reply": prefix + _GUIDE_BODY,
         "trace": append_trace(state, "能力说明", "未调用业务数据或医学资料工具", "done"),
@@ -230,6 +271,18 @@ async def capability_guide(state: AgentState) -> AgentState:
         "sources": [],
         "citation": None,
         "skill_id": "capability_guide",
+        "skill_version": "1.1.0",
+    }
+
+
+async def clarify(state: AgentState) -> AgentState:
+    return {
+        "reply": _CLARIFY_BODY,
+        "trace": append_trace(state, "意图澄清", "表达不够明确，先追问对齐", "done"),
+        "model_mode": "local",
+        "sources": [],
+        "citation": None,
+        "skill_id": "clarify",
         "skill_version": "1.0.0",
     }
 
@@ -329,7 +382,16 @@ def _grounding(route: str, result: dict) -> str:
         return "\n".join(lines)
     if route == "customer_insight":
         customer = result["context"]
-        return f"客户：{customer['name']}，阶段：{customer['tier']}。近期互动：{result['summary']} 未完成待办：{customer['open_task']}"
+        grade = customer.get("grade") or "—"
+        excerpt = customer.get("interaction_excerpt") or result.get("summary") or "暂无摘要"
+        return (
+            f"客户姓名：{customer['name']}\n"
+            f"观念阶梯：{customer['tier']}\n"
+            f"客户等级：{grade}\n"
+            f"近期摘要：{excerpt}\n"
+            f"未完成待办：{customer['open_task']}\n"
+            f"补充摘要：{result['summary']}"
+        )
     if route == "material_recommendation":
         docs = result.get("evidence", {}).get("documents") or result.get("sources") or []
         if not docs:
@@ -339,27 +401,59 @@ def _grounding(route: str, result: dict) -> str:
         status = result["institution"]
         return f"机构目录状态：{status['formulary']}，{status['coverage_trend']}，供应风险：{status['supply_risk']}。此为机构运营数据，不构成医学建议。"
     customer = result["customer_context"]
-    return f"客户：{customer['name']}。上次反馈：{customer['last_feedback']} 未完成待办：{customer['open_task']} 可用演示材料：{'；'.join(d['title'] for d in result['evidence']['documents']) or '未找到匹配材料，请补充主题'}。"
+    return (
+        f"客户：{customer['name']}\n"
+        f"上次反馈：{customer['last_feedback']}\n"
+        f"未完成待办：{customer['open_task']}\n"
+        f"可用演示材料：{'；'.join(d['title'] for d in result['evidence']['documents']) or '未找到匹配材料，请补充主题'}。"
+    )
 
 
 def _fallback_reply(route: str, result: dict) -> str:
     if route == "post_visit":
-        return f"我已从本次记录中抽取出观念变化和下次拜访信息，并生成一份待确认的 CRM 草稿：{result['extracted']['follow_up']} 请核对后再提交。"
+        return (
+            f"好的，我已从这段反馈里整理出观念变化和下次拜访信息，并生成待确认草稿："
+            f"{result['extracted']['follow_up']} "
+            f"你核对无误后再提交，我不会自动写入 CRM。"
+        )
     if route == "customer_insight":
         customer = result["context"]
-        return f"{customer['name']}当前处于{customer['tier']}阶段。最近互动：{result['summary']} 建议本次先回应其已表达的资料需求，并推进待办“{customer['open_task']}”。"
+        excerpt = customer.get("interaction_excerpt") or ""
+        summary = result.get("summary") or ""
+        focus = excerpt or summary
+        grade = customer.get("grade")
+        grade_bit = f"（{grade}）" if grade else ""
+        focus_bit = f"近期情况：{focus} " if focus else ""
+        return (
+            f"{customer['name']}目前处于「{customer['tier']}」阶段{grade_bit}。"
+            f"{focus_bit}"
+            f"建议优先推进待办「{customer['open_task']}」。"
+            f"若要看明细，也可以继续问互动次数或上次反馈。"
+        )
     if route == "material_recommendation":
         docs = result.get("evidence", {}).get("documents") or []
         if not docs:
-            return "未检索到相关已审批资料，可换一个主题继续询问，或联系医学团队。"
+            return "这轮没有检索到匹配的已审批资料。你可以换个主题，或说明医生最关心的顾虑点，我再帮你找。"
         lead = docs[0]
-        return f"推荐已审批资料《{lead['title']}》。{lead.get('excerpt', result['summary'])}"
+        return (
+            f"我先给你一份已审批资料《{lead['title']}》。"
+            f"{lead.get('excerpt', result['summary'])} "
+            f"需要的话我可以再按青少年/安全性等主题继续筛。"
+        )
     if route == "institution_access":
         status = result["institution"]
-        return f"该院目录状态{status['formulary']}，{status['coverage_trend']}，供应风险为“{status['supply_risk']}”。该结论来自机构运营数据，不构成医学建议。"
+        return (
+            f"该院目录状态是「{status['formulary']}」，{status['coverage_trend']}，"
+            f"供应风险为「{status['supply_risk']}」。这是机构运营数据，不构成医学建议。"
+            f"若要结合某位医生推进准入沟通，可以继续告诉我重点。"
+        )
     customer = result["customer_context"]
-    return f"已为{customer['name']}完成访前准备：先回应医生的既有顾虑“{customer['last_feedback']}”，再推进待办“{customer['open_task']}”；{'相关演示材料已列在下方。' if result['evidence']['documents'] else '未找到相关有效材料，请补充主题。'}"
-
+    has_docs = bool(result["evidence"]["documents"])
+    return (
+        f"已为{customer['name']}备好访前重点：先回应其既有顾虑「{customer['last_feedback']}」，"
+        f"再推进待办「{customer['open_task']}」。"
+        f"{'相关已审批材料在下方，可直接开启面对面拜访。' if has_docs else '这轮未匹配到足够材料，你可以补充主题后再问我。'}"
+    )
 
 async def synthesizer(state: AgentState) -> AgentState:
     """整理 grounding 与 fallback，真正的模型调用放到端点层，保证单次调用并支持真流式。"""
@@ -386,6 +480,7 @@ def build_graph():
     graph.add_node("planner", planner)
     graph.add_node("guardrail", guardrail)
     graph.add_node("capability_guide", capability_guide)
+    graph.add_node("clarify", clarify)
     graph.add_node("need_customer", need_customer)
     graph.add_node("customer_not_found", customer_not_found)
     graph.add_node("pre_visit", execute_pre_visit)
@@ -402,6 +497,7 @@ def build_graph():
         "material_recommendation": "material_recommendation",
         "institution_access": "institution_access",
         "capability_guide": "capability_guide",
+        "clarify": "clarify",
         "need_customer": "need_customer",
         "customer_not_found": "customer_not_found",
         "guardrail": "guardrail",
@@ -411,6 +507,7 @@ def build_graph():
     graph.add_edge("synthesizer", END)
     graph.add_edge("guardrail", END)
     graph.add_edge("capability_guide", END)
+    graph.add_edge("clarify", END)
     graph.add_edge("need_customer", END)
     graph.add_edge("customer_not_found", END)
     return graph.compile()

@@ -168,7 +168,7 @@
     "expect_route": "capability_guide",
     "expect_skill": "capability_guide",
     "expect_citation": false,
-    "expect_reply_contains": "超出",
+    "expect_reply_contains": "关系不大",
     "expect_reply_not_contains": "完成访前准备"
   },
   {
@@ -179,8 +179,18 @@
     "expect_route": "capability_guide",
     "expect_skill": "capability_guide",
     "expect_citation": false,
-    "expect_reply_contains": "超出",
+    "expect_reply_contains": "关系不大",
     "expect_reply_not_contains": "完成访前准备"
+  },
+  {
+    "id": "CLARIFY-001",
+    "mode": "auto",
+    "customer_id": "liu-min",
+    "query": "帮我看看",
+    "expect_route": "clarify",
+    "expect_skill": "clarify",
+    "expect_reply_contains": "还没完全理解",
+    "expect_reply_not_contains": "关系不大"
   },
   {
     "id": "NAME-PREP-001",

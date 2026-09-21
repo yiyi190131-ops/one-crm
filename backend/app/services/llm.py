@@ -86,17 +86,31 @@ async def stream_chat(messages: list[dict], *, temperature: float = 0.5, max_tok
 # 高层能力：意图分类 / 口语抽取 / 回答组织。
 # ---------------------------------------------------------------------------
 
-_ROUTES = ["pre_visit", "post_visit", "customer_insight", "material_recommendation", "institution_access", "capability_guide", "guardrail"]
+_ROUTES = [
+    "pre_visit",
+    "post_visit",
+    "customer_insight",
+    "material_recommendation",
+    "institution_access",
+    "capability_guide",
+    "clarify",
+    "guardrail",
+]
 
 
 async def llm_classify_intent(query: str) -> str | None:
     """用模型判定路由；不可用或结果非法时返回 None（交由关键词兜底）。"""
     system = (
         "你是医药代表 CRM Agent 的意图路由器。只输出 JSON：{\"route\": <route>}。"
-        "route 取值仅限：pre_visit(明确要求做访前准备/拜访重点/开场)、post_visit(访后记录)、customer_insight(客户互动洞察)、"
-        "material_recommendation(问药品或资料是什么、介绍产品、推荐材料)、institution_access(机构进药/进院/准入/供应)、"
-        "capability_guide(询问你能做什么，或与拜访无关的问题如数字、乱码、天气)、guardrail(超适应症或高风险医学问题，如银屑病等非批准适应症)。"
-        "乱码、纯数字、天气等与拜访无关的输入必须走 capability_guide。不要把普通问答默认成访前准备。只有明确要求访前准备/拜访重点/开场，或只发了医生姓名时才用 pre_visit。"
+        "route 取值仅限：pre_visit(明确要求做访前准备/拜访重点/开场)、post_visit(访后记录)、"
+        "customer_insight(客户互动洞察)、material_recommendation(问药品或资料是什么、介绍产品、推荐材料)、"
+        "institution_access(机构进药/进院/准入/供应)、"
+        "clarify(表达含糊、可能跟拜访有关但意图不清，应先追问)、"
+        "capability_guide(明确询问你能做什么，或完全无关如数字/乱码/天气/娱乐)、"
+        "guardrail(超适应症或高风险医学问题，如银屑病等非批准适应症)。"
+        "关键判断：含糊但可能是拜访相关时优先 clarify，不要轻易 capability_guide。"
+        "乱码、纯数字、天气等与拜访无关的输入才走 capability_guide。"
+        "不要把普通问答默认成访前准备。只有明确要求访前准备/拜访重点/开场，或只发了医生姓名时才用 pre_visit。"
     )
     content = await _chat(
         [{"role": "system", "content": system}, {"role": "user", "content": query}],
@@ -136,18 +150,27 @@ async def llm_extract_visit(transcript: str, dimensions: list[str], levels: list
 
 
 _COMPOSE_SYSTEM = (
-    "你是合规的医药 CRM 助手。请用简洁、自然、口语化的中文回答代表的问题，"
-    "但只能基于我提供的『已取回数据』组织表达：不得新增任何医学事实、数值、适应症、风险、承诺或外部知识；"
-    "引用、金额、机构数据只能来自已取回数据。回答控制在 60-220 字，纯文本。"
+    "你是一线医药代表的拜访助手，说话自然、专业、有温度。"
+    "只能基于『已取回数据』组织表达：不得新增医学事实、数值、适应症、风险、承诺或外部知识；"
+    "引用、金额、机构数据只能来自已取回数据。"
+    "回答结构：先给一句结论，再补 1-2 个关键事实，必要时用一句轻量追问收束。"
+    "要承接此前对话，不要每句都像重新开场；不要把字段用分号生硬堆砌，改写成口语句子。"
+    "控制在 80-200 字，纯文本，不要 Markdown 标题。"
 )
 
 
 def compose_messages(user_query: str, grounding: str, history: str = "") -> list[dict]:
     """供流式接口复用的 compose 提示词。"""
-    prior = f"\n\n此前同一医生会话：\n{history}\n" if history else ""
+    prior = f"\n\n此前同一医生会话（仅供语气衔接，事实仍以已取回数据为准）：\n{history}\n" if history else ""
     return [
         {"role": "system", "content": _COMPOSE_SYSTEM},
-        {"role": "user", "content": f"代表问题：{user_query}{prior}\n已取回数据：\n{grounding}\n\n请直接回答当前问题，不要改写成访前准备或客户简报。可承接此前对话，但不得引入已取回数据之外的事实。"},
+        {
+            "role": "user",
+            "content": (
+                f"代表问题：{user_query}{prior}\n已取回数据：\n{grounding}\n\n"
+                "请直接回答当前问题；可承接对话，但不得引入已取回数据之外的事实。"
+            ),
+        },
     ]
 
 
