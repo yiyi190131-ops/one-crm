@@ -91,6 +91,7 @@ export type DeveloperRun = {
   trace: TraceStep[];
   created_at: string;
 };
+export type KnowledgeLevel = "未知" | "不确定" | "认可" | "认可且推荐" | "中立";
 export type Customer = {
   id: string;
   name: string;
@@ -107,6 +108,19 @@ export type Customer = {
   interaction_stats?: Record<string, number>;
   perception_ladder?: { dimension: string; level: string }[];
   institution?: { formulary: string; coverage_trend: string; supply_risk: string };
+  /** CRM HCP360 扩展字段（演示种子） */
+  crm_code?: string;
+  tags?: string[];
+  gender?: string;
+  department?: string;
+  role?: string;
+  grade?: string;
+  knowledge?: {
+    dimensions: { name: string; basic: string; advanced: string }[];
+    advantages: { name: string; level: string }[];
+  };
+  target_patients?: string[];
+  material_delivery?: { title: string; views: number; viewed_at: string };
 };
 export type PendingTask = { label: string; prompt: string; kind: "ask" | "post" | "pre" | "open" };
 export type PreTurn = { id: string; question: string; loading: boolean; kind: "answer" | "recommend" | "unsupported"; result: AgentResponse | null };

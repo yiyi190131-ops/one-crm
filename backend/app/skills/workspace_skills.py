@@ -6,15 +6,21 @@ from app.services.tools import read_customer_context, read_institution_status, r
 
 
 def run_customer_insight_skill(_: str, customer_id: str = "liu-min") -> dict:
+    from app.services.demo_data import knowledge_summary
+
     context = read_customer_context(customer_id)
+    summary = f"{context.get('interaction_excerpt', '')} {knowledge_summary(context)}".strip()
     return {
         "skill_id": "customer_insight",
-        "skill_version": "1.1.0",
+        "skill_version": "1.2.0",
         "context": context,
         "sources": [crm_interaction_source(context)],
-        "summary": context["interaction_excerpt"],
+        "summary": summary,
         "interactions": context.get("interactions", []),
         "interaction_stats": context.get("interaction_stats", {}),
+        "knowledge": context.get("knowledge"),
+        "target_patients": context.get("target_patients", []),
+        "grade": context.get("grade"),
     }
 
 

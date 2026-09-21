@@ -241,5 +241,16 @@
     "expect_skill": "material_recommendation",
     "expect_citation": true,
     "expect_reply_not_contains": "未检索到"
+  },
+  {
+    "id": "INSIGHT-AI-WENJIA-001",
+    "mode": "auto",
+    "customer_id": "ai-wenjia",
+    "query": "艾文佳主任观念阶梯和客户等级",
+    "expect_route": "customer_insight",
+    "expect_skill": "customer_insight",
+    "expect_source": "艾文佳主任",
+    "expect_reply_contains": "等级-A-VA",
+    "expect_reply_not_contains": "超出"
   }
 ]

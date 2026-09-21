@@ -36,7 +36,20 @@ function after(stage: PostStage, target: PostStage) {
 const TYPE_MS = 32;
 const TYPE_PAUSE_MS = 160;
 const EVIDENCE_STEP_MS = 220;
-const SAMPLE_POST_FEEDBACK = "医生对长期安全仍有顾虑，希望补充青少年研究资料，下周四下午再次沟通。";
+
+function samplePostFeedback(customer: Customer) {
+  const name = customer.name;
+  const patients = (customer.target_patients ?? []).slice(0, 2).join("、") || "中重度 AD";
+  const safety = customer.perception_ladder?.find((item) => item.dimension === "长期安全")?.level ?? "中立";
+  const control = customer.perception_ladder?.find((item) => item.dimension === "维稳")?.level ?? "中立";
+  const base = customer.last_feedback?.trim() || "对产品仍有顾虑，希望补充循证材料。";
+  return (
+    `今天和${name}完成面对面拜访。沟通对象主要是${patients}相关需求。` +
+    `当前观念上长期安全偏「${safety}」、维稳偏「${control}」。` +
+    `医生反馈：${base}` +
+    `我建议下周同一时段复访，并带上对应已审批资料做一次对照讲解，同时确认${customer.open_task || "后续跟进事项"}。`
+  );
+}
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
@@ -190,7 +203,9 @@ export function VisitFlow() {
   const speechRef = useRef<SpeechRecognizer | null>(null);
   const voiceBaseRef = useRef("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const jumpBottomRef = useRef<HTMLButtonElement>(null);
   const stickToBottomRef = useRef(true);
+  const followBudgetRef = useRef<number | null>(null);
   customerRef.current = customer;
 
   async function loadAids(customerId: string) {
@@ -265,40 +280,82 @@ export function VisitFlow() {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onScroll = () => {
-      stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const syncJump = () => {
+      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const atBottom = gap < 80;
+      stickToBottomRef.current = atBottom;
+      if (atBottom) followBudgetRef.current = null;
+      const btn = jumpBottomRef.current;
+      if (btn) btn.hidden = gap <= el.clientHeight * 0.35;
     };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
+    el.addEventListener("scroll", syncJump, { passive: true });
+    syncJump();
+    return () => el.removeEventListener("scroll", syncJump);
   }, []);
 
   useEffect(() => {
-    if (loading) stickToBottomRef.current = true;
+    if (loading) {
+      stickToBottomRef.current = true;
+      const el = scrollRef.current;
+      followBudgetRef.current = el ? el.scrollTop + el.clientHeight : null;
+    } else {
+      followBudgetRef.current = null;
+    }
   }, [loading]);
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el || screen === "aid") return;
+    const syncJump = () => {
+      const btn = jumpBottomRef.current;
+      if (!btn) return;
+      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+      btn.hidden = gap <= el.clientHeight * 0.35;
+    };
     if (turns.length === 0 && screen === "home") {
       el.scrollTop = 0;
+      syncJump();
       return;
     }
     const showPostNow = openVisitIndex(turns) >= 0;
-    if (!stickToBottomRef.current && !loading) return;
+
     if (loading && stickToBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
+      const budget = followBudgetRef.current;
+      const maxTop = budget == null ? el.scrollHeight : Math.min(el.scrollHeight, budget);
+      if (el.scrollTop < maxTop) el.scrollTop = maxTop;
+      syncJump();
       return;
     }
+
+    if (!stickToBottomRef.current && !loading) {
+      syncJump();
+      return;
+    }
+
     if (!loading && !showPostNow) {
       const bots = el.querySelectorAll<HTMLElement>(".proto-turn.proto-bot");
       const lastBot = bots[bots.length - 1];
       if (lastBot) {
         el.scrollTop += lastBot.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        syncJump();
         return;
       }
     }
-    if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+
+    if (stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      syncJump();
+    }
   }, [screen, postStage, todo, turns, loading, customer]);
+
+  function jumpToBottom() {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = true;
+    followBudgetRef.current = null;
+    el.scrollTop = el.scrollHeight;
+    if (jumpBottomRef.current) jumpBottomRef.current.hidden = true;
+  }
 
   useEffect(() => {
     if (!notice) return;
@@ -926,6 +983,21 @@ export function VisitFlow() {
         {notice && <p className="proto-toast" role="status">{notice}</p>}
 
         {screen !== "aid" && (
+          <button
+            type="button"
+            ref={jumpBottomRef}
+            className="proto-jump-bottom"
+            aria-label="回到底部"
+            hidden
+            onClick={jumpToBottom}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+
+        {screen !== "aid" && (
           <Composer
             value={input}
             listening={listening}
@@ -936,7 +1008,9 @@ export function VisitFlow() {
             idle={welcome}
             placeholder={welcome ? "今天我能为您做些什么？" : "发消息给拜访助手"}
             onChange={setInput}
-            onFill={() => setInput(SAMPLE_POST_FEEDBACK)}
+            onFill={() => {
+              if (customer) setInput(samplePostFeedback(customer));
+            }}
             onVoice={voice}
             onSend={sendComposer}
             onSubmitVisit={() => setPostStage("confirm")}
@@ -1004,11 +1078,18 @@ function PreBrief({ customer, aids, onAsk, onStart, showChips = true }: { custom
   const product = customer.product;
   const material = aids[0];
   const articleTitle = "达必妥与 JAK 抑制剂安全性对比研究（2026）";
+  const advantages = (customer.knowledge?.advantages ?? [])
+    .filter((item) => item.level && item.level !== "未知")
+    .slice(0, 3)
+    .map((item) => `${item.name}：${item.level}`);
+  const patients = (customer.target_patients ?? []).slice(0, 3);
   return (
     <>
       <p className="proto-copy">已为你准备好{customer.name}的访前简报。</p>
       <ul className="proto-list proto-copy">
         <li>当前内容围绕<b>{product}</b>展开。如需查看其他相关内容可以告诉我。</li>
+        {customer.grade && <li>客户等级：<b>{customer.grade}</b>{customer.department ? ` · ${customer.department}${customer.role ? ` / ${customer.role}` : ""}` : ""}</li>}
+        {customer.hospital && <li>所属机构：{customer.hospital}</li>}
       </ul>
       <hr className="proto-rule" />
       <p className="proto-copy">📌 上次拜访（{customer.last_visit}）</p>
@@ -1016,6 +1097,8 @@ function PreBrief({ customer, aids, onAsk, onStart, showChips = true }: { custom
         <li>使用材料：{customer.last_material ?? "—"}</li>
         <li>拜访反馈：{customer.last_feedback}</li>
         <li>当前观念阶梯<b>：{customer.tier}</b></li>
+        {advantages.length > 0 && <li>关键观念：{advantages.join("；")}</li>}
+        {patients.length > 0 && <li>目标患者侧重：{patients.join("、")}</li>}
       </ul>
       <p className="proto-copy" style={{ marginTop: 12 }}>🎯 <b>本次拜访重点：</b></p>
       <ul className="proto-list proto-copy">

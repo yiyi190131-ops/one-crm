@@ -649,6 +649,32 @@
   background: #fff;
   transition: background var(--dur), height var(--dur);
 }
+.proto-jump-bottom {
+  position: absolute;
+  z-index: 5;
+  right: 18px;
+  bottom: 118px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  color: #404040;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12), inset 0 0 0 1px #e5e5e5;
+  cursor: pointer;
+}
+.proto-phone:has(.proto-composer.has-submit) .proto-jump-bottom {
+  bottom: 158px;
+}
+.proto-jump-bottom:hover {
+  color: #171717;
+  background: #fafafa;
+}
+.proto-jump-bottom:active {
+  transform: translateY(1px);
+}
 .proto-composer.is-idle {
   background: transparent;
 }
