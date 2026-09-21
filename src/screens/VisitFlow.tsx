@@ -919,7 +919,7 @@ export function VisitFlow() {
                       onOpenMaterial={(aid) => { setActiveAid(aid); setActiveSeconds(0); setScreen("aid"); }}
                     />
                   ))}
-                  {showPreDoctors && !loading && (
+                  {!loading && (
                     <DoctorSuggest customers={customers} onChoose={chooseDoctor} />
                   )}
                 </>
@@ -1059,7 +1059,7 @@ function DoctorPick({
 function DoctorSuggest({ customers, onChoose }: { customers: Customer[]; onChoose: (c: Customer) => void }) {
   return (
     <div className="proto-guide">
-      <p className="proto-pick-label">👇 这几位也许是你要找的</p>
+      <p className="proto-pick-label">👇 请选择医生后继续</p>
       <div className="proto-pick">
         {customers.map((item) => (
           <button key={item.id} className="proto-pick-item" onClick={() => onChoose(item)}>
