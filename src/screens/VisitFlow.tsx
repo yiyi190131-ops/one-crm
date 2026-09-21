@@ -542,7 +542,7 @@ export function VisitFlow() {
     }
     if (q === "访后记录") {
       intentRef.current = "post";
-      setShowPreDoctors(false);
+      setShowPreDoctors(true);
     }
     setInput("");
     const data = await pushExchange(q, "auto");
@@ -953,6 +953,7 @@ export function VisitFlow() {
                       result={postResult}
                       todo={todo}
                       streaming={loading}
+                      onFill={() => setInput(samplePostFeedback(customer))}
                       onConfirmLadder={() => setPostStage("follow")}
                       onTodo={(v) => void decideTodo(v)}
                       onConfirm={(edits) => void confirmVisit(edits)}
@@ -1400,7 +1401,7 @@ function highlightPII(text: string, spans: string[], extra?: string | null): Rea
 }
 
 function Post({
-  customer, session, stage, turns, narratives, result, todo, streaming, onConfirmLadder, onTodo, onConfirm, onCancel,
+  customer, session, stage, turns, narratives, result, todo, streaming, onFill, onConfirmLadder, onTodo, onConfirm, onCancel,
 }: {
   customer: Customer;
   session: VisitSession;
@@ -1410,6 +1411,7 @@ function Post({
   result: AgentResponse | null;
   todo: "adopt" | "ignore" | null;
   streaming: boolean;
+  onFill?: () => void;
   onConfirmLadder: () => void;
   onTodo: (v: "adopt" | "ignore") => void;
   onConfirm: (edits?: DraftEdits) => void;
@@ -1437,6 +1439,11 @@ function Post({
       <p className="proto-copy">
         我想了解一下，这次您和{customer.name}讨论{customer.product}时，他对于产品有什么反馈，<b>观念阶梯是否有变化</b>？（比如长期安全、维稳等）
       </p>
+      {stage === "idle" && onFill && (
+        <button type="button" className="proto-btn proto-fill-post" onClick={onFill}>
+          试填一段模拟拜访反馈
+        </button>
+      )}
       {user1 && (
         <div className="proto-turn is-user">
           <div className="proto-user">{user1}</div>

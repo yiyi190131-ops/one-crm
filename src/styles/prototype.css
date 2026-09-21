@@ -457,6 +457,11 @@
   font-size: 14px;
   font-weight: 500;
 }
+.proto-btn.proto-fill-post {
+  background: #fff;
+  color: #171717;
+  box-shadow: inset 0 0 0 1px #e5e5e5;
+}
 .proto-btn.lg {
   height: 40px;
   width: 100%;

@@ -1,4 +1,5 @@
 from typing import Literal, TypedDict
+import re
 
 from langgraph.graph import END, START, StateGraph
 
@@ -13,7 +14,17 @@ from app.skills.workspace_skills import (
     run_material_recommendation_skill,
 )
 
-Route = Literal["pre_visit", "post_visit", "customer_insight", "material_recommendation", "institution_access", "capability_guide", "need_customer", "guardrail"]
+Route = Literal[
+    "pre_visit",
+    "post_visit",
+    "customer_insight",
+    "material_recommendation",
+    "institution_access",
+    "capability_guide",
+    "need_customer",
+    "customer_not_found",
+    "guardrail",
+]
 _CUSTOMER_ROUTES = {"pre_visit", "post_visit", "customer_insight", "institution_access"}
 
 DEFAULT_CUSTOMER = "liu-min"
@@ -38,6 +49,12 @@ _GUIDE_BODY = (
     "5. 访后记录：从语音或文本生成草稿，确认后再写入 CRM。\n\n"
     "你可以直接说，例如“查一下刘敏主任最近的互动记录”。"
 )
+_NAME_BLOCK = {
+    "该", "这", "那", "某", "贵", "本", "您", "你", "他", "她", "我", "们", "的", "和", "与",
+    "其", "各", "有", "无", "请", "帮", "查", "找", "问", "看", "说", "听", "让", "给",
+    "皮肤科", "儿科", "内科", "外科", "科室", "医院", "协会", "医师", "代表", "客户", "目标",
+    "随访", "主治", "副主", "主任医",
+}
 
 
 class AgentState(TypedDict, total=False):
@@ -71,6 +88,7 @@ _PLANS: dict[str, list[str]] = {
     "guardrail": ["合规预检"],
     "capability_guide": ["说明当前可用业务能力"],
     "need_customer": ["确认拜访对象"],
+    "customer_not_found": ["核对客户名单"],
     "post_visit": ["抽取访后关键信息", "隐私与字段校验", "生成待确认 CRM 草稿"],
     "material_recommendation": ["读取客户上下文", "检索已审批材料", "输出可用材料建议"],
     "institution_access": ["读取机构准入状态", "核对运营与供应风险", "汇总业务建议"],
@@ -79,8 +97,42 @@ _PLANS: dict[str, list[str]] = {
 }
 
 
+def _customer_aliases() -> list[str]:
+    aliases: list[str] = []
+    for item in CUSTOMERS.values():
+        raw = item["name"].replace(" ", "")
+        aliases.append(raw)
+        for suffix in ("主任", "医生", "大夫", "教授"):
+            if raw.endswith(suffix) and len(raw) > len(suffix):
+                aliases.append(raw[: -len(suffix)])
+    return sorted(set(aliases), key=len, reverse=True)
+
+
 def _customer_names() -> list[str]:
-    return [item["name"].replace(" ", "") for item in CUSTOMERS.values()]
+    return _customer_aliases()
+
+
+def _known_customer_hit(query: str) -> bool:
+    return any(alias in query for alias in _customer_aliases())
+
+
+def _unknown_doctor_label(query: str) -> str | None:
+    """若口述里像在点名某位医生，但演示客户名单未命中，返回该称呼。"""
+    if _known_customer_hit(query):
+        return None
+    stripped = query
+    for prefix in ("查一下", "查找", "查询", "找一下", "拜访一下", "看看", "看一下"):
+        stripped = stripped.replace(prefix, "")
+    if stripped.startswith("拜访") and not stripped.startswith("拜访反馈"):
+        stripped = stripped[2:]
+    for match in re.finditer(r"([\u4e00-\u9fff]{1,4})(医生|主任|大夫|教授)", stripped):
+        person, title = match.group(1), match.group(2)
+        if person in _NAME_BLOCK or any(token in person for token in ("皮肤科", "儿科", "内科", "外科", "科室", "医院", "一下", "上次")):
+            continue
+        if person.startswith(("一", "下", "的", "了", "和", "还", "缺")):
+            continue
+        return f"{person}{title}"
+    return None
 
 
 def _asked_help(query: str) -> bool:
@@ -90,7 +142,7 @@ def _asked_help(query: str) -> bool:
 def _is_offtopic(query: str) -> bool:
     if _asked_help(query):
         return False
-    if any(name in query for name in _customer_names()):
+    if _known_customer_hit(query) or _unknown_doctor_label(query):
         return False
     if any(word in query for word in _DOMAIN_HINTS):
         return False
@@ -107,6 +159,9 @@ def _keyword_route(query: str, mode: str) -> Route:
     for phrase, route in _GUIDE_PHRASES.items():
         if phrase in query:
             return route
+    # 点到未收录医生时，优先提示未找到，避免落到「超出能力范围」。
+    if _unknown_doctor_label(query):
+        return "customer_not_found"
     if any(word in query for word in ("访后", "拜访反馈", "记录本次", "记录医生反馈")):
         return "post_visit"
     if any(word in query for word in ("互动", "洞察", "最近", "历史", "客户360", "上次", "待办", "观念阶梯")):
@@ -123,7 +178,7 @@ def _keyword_route(query: str, mode: str) -> Route:
         return "institution_access"
     if any(phrase in query for phrase in ("访前", "帮我准备", "拜访重点", "续方拜访", "开场")):
         return "pre_visit"
-    if any(name in query for name in _customer_names()):
+    if _known_customer_hit(query):
         return "pre_visit"
     return "capability_guide"
 
@@ -187,6 +242,23 @@ async def need_customer(state: AgentState) -> AgentState:
         "sources": [],
         "citation": None,
         "skill_id": "need_customer",
+        "skill_version": "1.0.0",
+    }
+
+
+async def customer_not_found(state: AgentState) -> AgentState:
+    label = _unknown_doctor_label(state["query"].replace(" ", "")) or "该医生"
+    options = "、".join(item["name"] for item in list(CUSTOMERS.values())[:5])
+    return {
+        "reply": (
+            f"未找到「{label}」。当前演示客户名单里没有这位医生。"
+            f"你可以换一位继续，例如：{options}等。"
+        ),
+        "trace": append_trace(state, "客户核对", f"名单未命中：{label}", "done"),
+        "model_mode": "local",
+        "sources": [],
+        "citation": None,
+        "skill_id": "customer_not_found",
         "skill_version": "1.0.0",
     }
 
@@ -315,6 +387,7 @@ def build_graph():
     graph.add_node("guardrail", guardrail)
     graph.add_node("capability_guide", capability_guide)
     graph.add_node("need_customer", need_customer)
+    graph.add_node("customer_not_found", customer_not_found)
     graph.add_node("pre_visit", execute_pre_visit)
     graph.add_node("customer_insight", execute_customer_insight)
     graph.add_node("material_recommendation", execute_material_recommendation)
@@ -322,13 +395,24 @@ def build_graph():
     graph.add_node("post_visit", execute_post_visit)
     graph.add_node("synthesizer", synthesizer)
     graph.add_edge(START, "planner")
-    graph.add_conditional_edges("planner", planner_edge, {"pre_visit": "pre_visit", "post_visit": "post_visit", "customer_insight": "customer_insight", "material_recommendation": "material_recommendation", "institution_access": "institution_access", "capability_guide": "capability_guide", "need_customer": "need_customer", "guardrail": "guardrail"})
+    graph.add_conditional_edges("planner", planner_edge, {
+        "pre_visit": "pre_visit",
+        "post_visit": "post_visit",
+        "customer_insight": "customer_insight",
+        "material_recommendation": "material_recommendation",
+        "institution_access": "institution_access",
+        "capability_guide": "capability_guide",
+        "need_customer": "need_customer",
+        "customer_not_found": "customer_not_found",
+        "guardrail": "guardrail",
+    })
     for node in ("pre_visit", "customer_insight", "material_recommendation", "institution_access", "post_visit"):
         graph.add_edge(node, "synthesizer")
     graph.add_edge("synthesizer", END)
     graph.add_edge("guardrail", END)
     graph.add_edge("capability_guide", END)
     graph.add_edge("need_customer", END)
+    graph.add_edge("customer_not_found", END)
     return graph.compile()
 
 

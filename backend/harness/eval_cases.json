@@ -252,5 +252,15 @@
     "expect_source": "艾文佳主任",
     "expect_reply_contains": "等级-A-VA",
     "expect_reply_not_contains": "超出"
+  },
+  {
+    "id": "UNKNOWN-DOCTOR-001",
+    "mode": "auto",
+    "customer_id": "liu-min",
+    "query": "查一下张伟医生的互动记录",
+    "expect_route": "customer_not_found",
+    "expect_skill": "customer_not_found",
+    "expect_reply_contains": "未找到",
+    "expect_reply_not_contains": "超出"
   }
 ]
