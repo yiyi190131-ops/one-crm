@@ -1235,7 +1235,7 @@ function TurnBlock({ turn, customer, streaming, onOpenMaterial }: {
           <HospitalEvidence customer={customer} />
         </Staggered>
       )}
-      {(route === "capability_guide" || route === "guardrail") && (
+      {route === "guardrail" && (
         <Staggered streaming={streaming}>
           <GuideEvidence />
         </Staggered>
