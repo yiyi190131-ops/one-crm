@@ -23,6 +23,7 @@ Route = Literal[
     "capability_guide",
     "need_customer",
     "customer_not_found",
+    "customer_roster",
     "clarify",
     "guardrail",
 ]
@@ -40,6 +41,10 @@ _CLARIFY_HINTS = (
     "讲讲", "说下", "了解", "想问", "请问", "有点", "不太清", "什么意思", "再确认", "嗯",
 )
 _OFFTOPIC_HARD = ("天气", "下雨", "股票", "彩票", "笑话", "外卖", "打车", "足球", "篮球", "游戏")
+_ROSTER_HINTS = (
+    "哪些医生", "哪些客户", "医生名单", "客户名单", "医生列表", "客户列表",
+    "所有医生", "全部医生", "都有谁", "医生有哪些", "客户有哪些", "有哪些医生",
+)
 _GUIDE_PHRASES: dict[str, Route] = {
     "医生信息查询": "customer_insight",
     "拜访历史回顾": "customer_insight",
@@ -68,6 +73,7 @@ _NAME_BLOCK = {
     "其", "各", "有", "无", "请", "帮", "查", "找", "问", "看", "说", "听", "让", "给",
     "皮肤科", "儿科", "内科", "外科", "科室", "医院", "协会", "医师", "代表", "客户", "目标",
     "随访", "主治", "副主", "主任医",
+    "哪些", "所有", "全部", "各位", "几位", "哪位", "其他", "别的",
 }
 
 
@@ -154,6 +160,13 @@ def _asked_help(query: str) -> bool:
     return any(phrase in query for phrase in _HELP_PHRASES)
 
 
+def _wants_roster(query: str) -> bool:
+    """问的是演示名单本身，不是某位已点名的医生。"""
+    if _known_customer_hit(query):
+        return False
+    return any(phrase in query for phrase in _ROSTER_HINTS)
+
+
 def _is_offtopic(query: str) -> bool:
     """仅「完全无关」才视为超范围；含糊但可能跟拜访有关的走澄清。"""
     if _asked_help(query):
@@ -181,6 +194,8 @@ def _keyword_route(query: str, mode: str) -> Route:
         return "guardrail"
     if _asked_help(query):
         return "capability_guide"
+    if _wants_roster(query):
+        return "customer_roster"
     for phrase, route in _GUIDE_PHRASES.items():
         if phrase in query:
             return route
@@ -283,6 +298,32 @@ async def clarify(state: AgentState) -> AgentState:
         "sources": [],
         "citation": None,
         "skill_id": "clarify",
+        "skill_version": "1.0.0",
+    }
+
+
+def _roster_lines() -> list[str]:
+    lines = []
+    for item in CUSTOMERS.values():
+        grade = item.get("grade") or "—"
+        lines.append(f"{item['name']}，{item['hospital']}{item['department']}，{grade}")
+    return lines
+
+
+async def customer_roster(state: AgentState) -> AgentState:
+    lines = _roster_lines()
+    names = "、".join(item["name"] for item in CUSTOMERS.values())
+    grounding = "当前演示客户名单（只能使用这些医生，不要增删）：\n" + "\n".join(lines)
+    fallback = f"当前演示里有 {len(lines)} 位医生：{names}。你点一位姓名，我就可以查互动、做访前准备或记访后。"
+    return {
+        "reply": fallback,
+        "fallback": fallback,
+        "grounding": grounding,
+        "trace": append_trace(state, "客户名单", f"已列出 {len(lines)} 位演示医生", "done"),
+        "model_mode": "local",
+        "sources": [],
+        "citation": None,
+        "skill_id": "customer_roster",
         "skill_version": "1.0.0",
     }
 
@@ -482,6 +523,7 @@ def build_graph():
     graph.add_node("capability_guide", capability_guide)
     graph.add_node("clarify", clarify)
     graph.add_node("need_customer", need_customer)
+    graph.add_node("customer_roster", customer_roster)
     graph.add_node("customer_not_found", customer_not_found)
     graph.add_node("pre_visit", execute_pre_visit)
     graph.add_node("customer_insight", execute_customer_insight)
@@ -499,6 +541,7 @@ def build_graph():
         "capability_guide": "capability_guide",
         "clarify": "clarify",
         "need_customer": "need_customer",
+        "customer_roster": "customer_roster",
         "customer_not_found": "customer_not_found",
         "guardrail": "guardrail",
     })
@@ -509,6 +552,7 @@ def build_graph():
     graph.add_edge("capability_guide", END)
     graph.add_edge("clarify", END)
     graph.add_edge("need_customer", END)
+    graph.add_edge("customer_roster", END)
     graph.add_edge("customer_not_found", END)
     return graph.compile()
 

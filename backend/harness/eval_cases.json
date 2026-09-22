@@ -264,6 +264,16 @@
     "expect_reply_not_contains": "超出"
   },
   {
+    "id": "ROSTER-001",
+    "mode": "auto",
+    "customer_id": null,
+    "query": "都有哪些医生",
+    "expect_route": "customer_roster",
+    "expect_skill": "customer_roster",
+    "expect_reply_contains": "刘敏主任",
+    "expect_reply_not_contains": "未找到"
+  },
+  {
     "id": "UNKNOWN-DOCTOR-001",
     "mode": "auto",
     "customer_id": "liu-min",
